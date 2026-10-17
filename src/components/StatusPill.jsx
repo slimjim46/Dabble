@@ -4,9 +4,14 @@ const LABELS = {
   offline: 'Offline',
 }
 
-export default function StatusPill({ status, online, saving }) {
+export default function StatusPill({ status, online, saving, countries }) {
   const connected = status === 'connected'
-  const label = connected ? `${online} drawing` : LABELS[status] ?? 'Offline'
+  const hasStats = typeof countries === 'number'
+  const label = connected
+    ? hasStats
+      ? `${online} drawing · ${countries} ${countries === 1 ? 'country' : 'countries'}`
+      : `${online} drawing`
+    : LABELS[status] ?? 'Offline'
   const title = connected
     ? saving
       ? 'Live — your drawings are saved'

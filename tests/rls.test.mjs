@@ -317,5 +317,62 @@ const adminCalls = [
     error ? code(error) : 'accepted')
 }
 
+// ---- Phase 4: 0a ---------------------------------------------------------
+// Dev-only helper (supabase/dev/dev_only_delete_my_player.sql) removes only
+// the caller's own players row, reproducing the "player row missing" bug.
+{
+  const T = await signIn('T') // fresh user: no strokes, no sessions
+  const del = await T.c.rpc('dev_only_delete_my_player')
+  const { data: gone } = await T.c.from('players').select('id').eq('id', T.id).maybeSingle()
+
+  const { error: nameErr } = await T.c.rpc('set_my_name', { new_name: 'Phase4 Tester' })
+  const { data: player } = await T.c.from('players').select('name').eq('id', T.id).single()
+
+  const stroke = makeStroke()
+  const { error: strokeErr } = await T.c.from('strokes').insert(stroke)
+  const { data: saved } = await T.c.from('strokes').select('user_name').eq('id', stroke.id).maybeSingle()
+
+  const U = await signIn('U') // second user cannot touch T's row
+  const { error: foreignErr } = await U.c.rpc('dev_only_delete_my_player')
+  const { data: stillThere } = await T.c.from('players').select('name').eq('id', T.id).maybeSingle()
+
+  const noAuth = client() // no sign-in -> role anon, execute revoked
+  const { error: anonErr } = await noAuth.rpc('dev_only_delete_my_player')
+
+  check('0a', 'missing players row is recreated by set_my_name; name sticks and is used on the next stroke',
+    !del.error && gone === null && !nameErr && player?.name === 'Phase4 Tester' &&
+      !strokeErr && saved?.user_name === 'Phase4 Tester',
+    `del=${del.error?.code || 'ok'} gone=${gone === null} name=${nameErr?.code || player?.name} stroke=${strokeErr?.code || saved?.user_name}`)
+  check('0a-2', 'dev helper is self-only and unavailable to anon',
+    !foreignErr && stillThere?.name === 'Phase4 Tester' && code(anonErr) === '42501',
+    `foreign=${foreignErr?.code || 'ok'} name=${stillThere?.name} anon=${code(anonErr) || 'accepted'}`)
+}
+
+// ---- Phase 4: 4.3 --------------------------------------------------------
+{
+  const anonA = client()
+  const { data: anonStats, error: anonErr } = await anonA.rpc('get_live_stats')
+  const anonDenied = Boolean(anonErr) || anonStats === undefined
+
+  const { data: stats, error: statsErr } = await A.c.rpc('get_live_stats')
+  const statKeys = stats && typeof stats === 'object' ? Object.keys(stats).sort() : []
+  const statShapeOk = statKeys.join(',') === 'countries,online,top_countries' &&
+    typeof stats?.online === 'number' && typeof stats?.countries === 'number'
+  const noUserIds = !JSON.stringify(stats ?? {}).includes(A.id)
+
+  const { data: board, error: boardErr } = await A.c.rpc('get_country_leaderboard', { p_window: '24h' })
+  const rowKeys = Array.isArray(board) && board[0] ? Object.keys(board[0]).sort() : []
+  const boardShapeOk = Array.isArray(board) &&
+    (board.length === 0 || rowKeys.join(',') === 'code,playtime_seconds,players,strokes')
+  const noBoardLeak = !JSON.stringify(board ?? []).includes(A.id) &&
+    !JSON.stringify(board ?? []).toLowerCase().includes('user_id')
+
+  const { error: badWindow } = await A.c.rpc('get_country_leaderboard', { p_window: 'eternity' })
+
+  check('4.3', 'stats RPCs return aggregates only, are authenticated-only and reject a bad window',
+    anonDenied && !statsErr && statShapeOk && noUserIds && !boardErr && boardShapeOk && noBoardLeak && code(badWindow) === '22023',
+    `anon=${code(anonErr) || 'accepted'} stats=${code(statsErr) || statKeys.join('/')} board=${code(boardErr) || rowKeys.join('/')} leak=${noUserIds && noBoardLeak} bad=${code(badWindow) || 'accepted'}`)
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

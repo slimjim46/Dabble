@@ -8,7 +8,7 @@ const MAX_TRACKED = 200
  */
 export function createCursorStore() {
   const positions = new Map() // key -> { x, y, t }, ordered oldest -> newest
-  const info = new Map() // key -> { name, color }
+  const info = new Map() // key -> { name, color, country }
 
   return {
     update(key, x, y, now = performance.now()) {
@@ -19,8 +19,8 @@ export function createCursorStore() {
       }
     },
 
-    setInfo(key, name, color) {
-      info.set(key, { name, color })
+    setInfo(key, name, color, country) {
+      info.set(key, { name, color, country: country ?? null })
     },
 
     remove(key) {
@@ -53,6 +53,7 @@ export function createCursorStore() {
           alpha,
           name: meta?.name ?? 'Guest',
           color: meta?.color ?? '#6b6b73',
+          country: meta?.country ?? null,
         })
       }
       if (out.length > cap) {

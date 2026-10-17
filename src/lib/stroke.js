@@ -45,6 +45,19 @@ export function pathLength(points) {
   return total
 }
 
+/**
+ * Ink cost of one segment, and of a whole stroke. The formula must match the
+ * server's (public.stroke_path_length(points) * width / 800.0) so the client
+ * meter, the stroke split and the database agree.
+ */
+export function segmentCost(segLen, width) {
+  return (segLen * width) / 800
+}
+
+export function strokeCost(points, width) {
+  return segmentCost(pathLength(points), width)
+}
+
 export function strokePath(ctx, points) {
   if (points.length === 0) return
 

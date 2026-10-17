@@ -5,6 +5,12 @@ export const MAX_SCALE = 8
 export const INK_MAX = 100
 export const INK_REFILL_PER_SEC = 12
 
+// Client-side stroke splitting (Phase 4 step 0b): when one stroke's accrued
+// cost (path length * width / 800) reaches this, close it and start a new one.
+// Must stay below INK_SERVER_CAPACITY (150) or the final piece would be
+// permanently rejected by the server with 22023.
+export const STROKE_SPLIT_COST = 100
+
 // Server-side mirrors of public.dabble_limits()
 // (supabase/migrations/20261017230200_phase6_limits_trigger.sql). Change both
 // together: the database is the authority, these only shape client UX.

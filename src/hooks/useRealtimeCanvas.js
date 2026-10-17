@@ -75,7 +75,7 @@ async function hideWithRetry(id) {
  * `onVisualChange` asks the canvas to redraw. Returns a stable `api` object
  * for the drawing code to call, plus a few values for the status pill.
  */
-export function useRealtimeCanvas({ identityRef, store, cursors, name, color, onVisualChange }) {
+export function useRealtimeCanvas({ identityRef, store, cursors, name, color, country, onVisualChange }) {
   const [status, setStatus] = useState(supabase ? 'connecting' : 'offline')
   const [online, setOnline] = useState(1)
   const [saving, setSaving] = useState(true)
@@ -92,7 +92,7 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, on
       pending: [], // flat [x, y, ...] waiting for the next flush
       cursor: null,
       cursorDirty: false,
-      presence: { name, color },
+      presence: { name, color, country },
       watermark: null, // created_at of the newest row we've seen
       banned: false, // set after sign-in when players.banned is true
       queue: createPersistQueue({
@@ -159,16 +159,16 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, on
     }
   }, [identityRef])
 
-  // ---- keep Presence in sync with name / color -----------------------------
+  // ---- keep Presence in sync with name / color / country -------------------
   useEffect(() => {
     const s = ref.current
-    s.presence = { name, color }
+    s.presence = { name, color, country }
     if (!s.channel || !s.subscribed) return undefined
     const timer = setTimeout(() => {
       Promise.resolve(s.channel?.track(s.presence)).catch(() => {})
     }, 400)
     return () => clearTimeout(timer)
-  }, [name, color])
+  }, [name, color, country])
 
   // ---- anonymous auth ------------------------------------------------------
   useEffect(() => {
@@ -382,7 +382,7 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, on
         for (const key of keys) {
           if (key === s.key) continue
           const meta = sanitizePresence(state[key]?.[0])
-          cursors.setInfo(key, meta.name, meta.color)
+          cursors.setInfo(key, meta.name, meta.color, meta.country)
         }
         setOnline(Math.max(1, keys.length))
         onVisualChange()

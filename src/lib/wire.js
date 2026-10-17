@@ -59,5 +59,6 @@ export function sanitizePresence(meta) {
   return {
     name: name || 'Guest',
     color: isValidHexColor(meta?.color) ? meta.color : '#6b6b73',
+    country: typeof meta?.country === 'string' && /^[A-Z]{2}$/.test(meta.country) ? meta.country : null,
   }
 }

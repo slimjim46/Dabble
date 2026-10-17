@@ -1,0 +1,32 @@
+-- Phase 4.5: optional 90-day sessions cleanup — DOCUMENTATION ONLY, DISABLED.
+--
+-- This migration intentionally contains no executable statements. It records
+-- how to retire old sessions without ever enabling anything automatically.
+--
+-- What it does (when you choose to enable it): deletes session rows whose
+-- last_seen is older than 90 days. Nothing else is touched — no players, no
+-- strokes. Stats only look at the last 60 seconds (live) or a bounded window
+-- (leaderboard), so deleting ancient rows only shrinks the leaderboard's
+-- "all" window, which is the point.
+--
+-- Trust model: pg_cron runs as the database owner, so it can delete rows that
+-- no API role may touch. That is the only reason this is not an API route.
+--
+-- To enable it (OWNER action, after review):
+--   1. Make sure pg_cron is available and enabled on the project
+--      (Dashboard -> Database -> Extensions -> pg_cron).
+--   2. Uncomment the two statements below and apply them (SQL editor is fine).
+--   3. Verify with:  select * from cron.job;
+--
+-- create extension if not exists pg_cron;
+--
+-- select cron.schedule(
+--   'dabble-sessions-cleanup',          -- job name
+--   '17 3 * * *',                       -- daily at 03:17 UTC (off-peak)
+--   $$
+--     delete from public.sessions
+--     where last_seen < now() - interval '90 days';
+--   $$
+-- );
+--
+-- To undo:  select cron.unschedule('dabble-sessions-cleanup');

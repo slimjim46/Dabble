@@ -8,6 +8,12 @@ function roundedRect(ctx, x, y, w, h, r) {
   ctx.closePath()
 }
 
+/** "DE" -> 🇩🇪 (regional indicator pair). Unknown codes return ''. */
+function flagEmoji(code) {
+  if (typeof code !== 'string' || !/^[A-Z]{2}$/.test(code)) return ''
+  return String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65))
+}
+
 /**
  * Draws remote cursors in screen space (so arrows and labels stay the same
  * size at any zoom). Call with the canvas already in CSS-pixel coordinates.
@@ -44,7 +50,9 @@ export function drawCursors(ctx, cursors, view, viewWidth, viewHeight) {
     ctx.stroke()
     ctx.fill()
 
-    const textWidth = ctx.measureText(c.name).width
+    const flag = flagEmoji(c.country)
+    const label = flag ? `${flag} ${c.name}` : c.name
+    const textWidth = ctx.measureText(label).width
     roundedRect(ctx, 10, 18, textWidth + 24, 20, 10)
     ctx.fillStyle = 'rgba(24, 24, 27, 0.86)'
     ctx.fill()
@@ -55,7 +63,7 @@ export function drawCursors(ctx, cursors, view, viewWidth, viewHeight) {
     ctx.fill()
 
     ctx.fillStyle = '#ffffff'
-    ctx.fillText(c.name, 27, 28.5)
+    ctx.fillText(label, 27, 28.5)
 
     ctx.restore()
   }

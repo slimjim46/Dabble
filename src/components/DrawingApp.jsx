@@ -4,6 +4,8 @@ import { drawCursors } from '../engine/overlay.js'
 import { createPaperCache } from '../engine/paperCache.js'
 import { createStrokeStore } from '../engine/strokeStore.js'
 import { useRealtimeCanvas } from '../hooks/useRealtimeCanvas.js'
+import { useLiveStats } from '../hooks/useLiveStats.js'
+import { useSession } from '../hooks/useSession.js'
 import {
   INK_MAX,
   INK_REFILL_PER_SEC,
@@ -14,12 +16,13 @@ import {
   PAPER_SIZE,
   POINT_MIN_DIST_SCREEN,
   SIMPLIFY_EPSILON_SCREEN,
+  STROKE_SPLIT_COST,
 } from '../lib/constants.js'
 import { loadIdentity, saveIdentity } from '../lib/identity.js'
 import { hitTest } from '../engine/hitTest.js'
 import { isReported, markReported, visibleToMe } from '../lib/reportedStrokes.js'
 import { isSupabaseEnabled, supabase } from '../lib/supabase.js'
-import { drawStroke, simplifyPoints } from '../lib/stroke.js'
+import { drawStroke, segmentCost, simplifyPoints } from '../lib/stroke.js'
 import { newStrokeId } from '../lib/strokeCodec.js'
 import StatusPill from './StatusPill.jsx'
 import Toolbar from './Toolbar.jsx'
@@ -61,6 +64,7 @@ export default function DrawingApp() {
   const rafRef = useRef(0)
   const drawRef = useRef(() => {})
   const inkRef = useRef(INK_MAX)
+  const splitCostRef = useRef(0) // accrued cost of the current stroke
   const colorRef = useRef(color)
   const widthRef = useRef(brushWidth)
   const identityRef = useRef(identity)
@@ -177,6 +181,10 @@ export default function DrawingApp() {
     [],
   )
 
+  // ---- sessions + live stats --------------------------------------------------
+  const { country } = useSession()
+  const liveStats = useLiveStats()
+
   // ---- realtime ---------------------------------------------------------------
   const { api, status, online, saving, banned, nameRejected, clearNameNotice } =
     useRealtimeCanvas({
@@ -185,6 +193,7 @@ export default function DrawingApp() {
       cursors,
       name,
       color,
+      country,
       onVisualChange: scheduleDraw,
     })
 
@@ -297,6 +306,7 @@ export default function DrawingApp() {
         points: [screenToWorld(clientX, clientY)],
       }
       liveStrokeRef.current = stroke
+      splitCostRef.current = 0
       api.strokeStart(stroke)
       scheduleDraw()
       return stroke
@@ -331,7 +341,8 @@ export default function DrawingApp() {
       api.strokePoint(point)
 
       // Drain ink per segment (no setState here; the interval syncs the meter).
-      inkRef.current = Math.max(0, inkRef.current - (segLen * stroke.width) / 800)
+      const segCost = segmentCost(segLen, stroke.width)
+      inkRef.current = Math.max(0, inkRef.current - segCost)
 
       if (inkRef.current <= 0) {
         endStroke()
@@ -341,7 +352,10 @@ export default function DrawingApp() {
 
       // Very long scribble: close this stroke and carry on in a new one, so a
       // single stroke never exceeds what the wire format / database allows.
-      if (stroke.points.length >= MAX_LIVE_POINTS) {
+      // The cost split (STROKE_SPLIT_COST) also keeps every piece under the
+      // server's ink capacity, so long strokes are never rejected with 22023.
+      splitCostRef.current += segCost
+      if (stroke.points.length >= MAX_LIVE_POINTS || splitCostRef.current >= STROKE_SPLIT_COST) {
         endStroke()
         startStroke(clientX, clientY)
         return
@@ -607,7 +621,7 @@ export default function DrawingApp() {
         onPointerCancel={cancelPointer}
       />
 
-      <StatusPill status={status} online={online} saving={saving} />
+      <StatusPill status={status} online={online} saving={saving} countries={liveStats?.countries} />
 
       <button type="button" className="recenter-button" onClick={centerView} title="Recenter view">
         🎯
