@@ -31,7 +31,20 @@ export function ensureAnonymousAuth() {
       try {
         const { data: { session } } = await supabase.auth.getSession()
         if (session) return session.user
-        const { data, error } = await supabase.auth.signInAnonymously()
+        const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY
+        let captchaToken = null
+        if (siteKey && typeof window !== 'undefined') {
+          try {
+            if (window.turnstile && typeof window.turnstile.getResponse === 'function') {
+              captchaToken = window.turnstile.getResponse()
+            }
+            if (!captchaToken && typeof window.turnstile?.execute === 'function') {
+              // some widgets need execute; but better to rely on rendered widget
+            }
+          } catch {}
+        }
+        const opts = captchaToken ? { captchaToken } : undefined
+        const { data, error } = await supabase.auth.signInAnonymously(opts)
         if (error) {
           console.error('[dabble] anonymous sign-in failed:', error.message)
           return null
