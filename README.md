@@ -40,6 +40,64 @@ password, or an account. Country codes come from the platform's geo header and
 are the only location data we keep. Sessions older than 90 days are deleted;
 strokes that enough people report are hidden from the canvas.
 
+## Canvas snapshots
+
+Sending every stroke on every load is the free-tier bandwidth bottleneck, so a
+scheduled job bakes the canvas into a single PNG. Clients can then load that one
+image plus only the strokes newer than it, instead of thousands of rows.
+
+`scripts/render-snapshot.mjs` runs every 10 minutes (`.github/workflows/snapshot.yml`)
+against the `snapshots` storage bucket:
+
+- Only strokes with `created_at <= now() - 10 minutes` (`SNAPSHOT_SETTLE`) are
+  baked in. Anything newer stays a vector on the client, so your own undo keeps
+  working immediately.
+- Normal runs are incremental: the previous PNG is the base and only newer
+  visible strokes are drawn on top. A full rebuild happens with `--full`, when
+  the previous snapshot is older than 24 h, or when a stroke that was already
+  baked in changed visibility (admin hide, report auto-hide, ban-with-hide, or
+  an admin restore) — tracked by `strokes.hidden_at`.
+- If nothing changed, nothing is uploaded. Only the newest 24 snapshots are
+  kept; older rows and objects are deleted by exact id.
+- `snapshots.last_stroke_created_at` records the newest baked stroke, which is
+  what makes the next incremental run possible.
+
+Local use (the service-role key is read from the environment only and is never
+printed or committed):
+
+```bash
+SUPABASE_URL=... SUPABASE_SERVICE_ROLE_KEY=... node scripts/render-snapshot.mjs [--full] [--dry-run]
+```
+
+### Storage estimate
+
+Measured on the dev project: a stroke costs about **1.7 KB** including its JSON
+points and indexes, so a 500 MB free-tier database holds roughly **250,000
+strokes** before strokes alone become a problem. Snapshots are small by
+comparison: a blank 2000×2000 PNG is ~19 KB, a busy one a few MB, and only 24
+exist at a time (worst case ~50 MB of the 1 GB storage allowance).
+
+### Archive plan (not built)
+
+When the table approaches ~200,000 strokes, archive everything already baked
+into the newest snapshot: export the rows (including hidden ones, for
+moderation) to object storage as JSONL, then delete them from `public.strokes`.
+Clients already see those strokes in the PNG, so nothing disappears; restore is
+a re-import by stroke id. This is deliberately deferred — the table is fine for
+now, and snapshot reads already keep the hot path small.
+
+### GitHub Actions notes
+
+- The cron both renders snapshots **and keeps the Supabase project from being
+  paused** for inactivity on the free tier.
+- A private repo gets ~2,000 free Actions minutes/month. At `*/10` that is
+  ~4,000+ minutes, so switch the cron to `*/30` on a private repo.
+- GitHub disables scheduled workflows after 60 days without repo activity; the
+  next push re-enables them.
+- The workflow targets whatever project `SUPABASE_URL` and
+  `SUPABASE_SERVICE_ROLE_KEY` point at. Keep them on dev unless you deliberately
+  want production snapshots.
+
 ## Scripts
 
 | Command           | Description                    |

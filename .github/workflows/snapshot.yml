@@ -1,0 +1,46 @@
+# Renders the shared canvas to a PNG snapshot every 10 minutes and stores it in
+# the 'snapshots' bucket, so clients can load one image plus recent strokes
+# instead of thousands of stroke rows.
+#
+# The schedule also doubles as a keep-alive: free-tier Supabase projects are
+# paused after ~1 week without activity, and this job touches the project every
+# run.
+#
+# Notes for the owner:
+#   - GitHub's cron minimum is 5 minutes; Actions minutes are billed, and a
+#     PRIVATE repo gets ~2,000 free minutes/month. At */10 that is roughly
+#     4,000+ minutes/month, so use '*/30' on a private repo.
+#   - Scheduled workflows are disabled automatically after 60 days without repo
+#     activity, and re-enable on the next push.
+#   - The secrets below decide which project is targeted. Keep them pointed at
+#     the DEV project unless you deliberately want production snapshots.
+
+name: Canvas snapshot
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: canvas-snapshot
+  cancel-in-progress: false
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Render snapshot
+        run: node scripts/render-snapshot.mjs
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
