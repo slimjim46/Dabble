@@ -9,3 +9,7 @@ dist/
 .env
 .env.*
 blocked-terms.txt
+
+# Windows/NTFS alternate-data-stream droppings and tool output
+*:Zone.Identifier
+repomix-output.xml
