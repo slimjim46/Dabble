@@ -4,3 +4,8 @@ dist/
 .env.local
 *.log
 .DS_Store
+
+# Environment variables and secrets
+.env
+.env.*
+blocked-terms.txt
