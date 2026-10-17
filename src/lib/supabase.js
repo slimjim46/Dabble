@@ -1,17 +1,18 @@
 import { createClient } from '@supabase/supabase-js'
 
-const SUPABASE_URL = 'https://ovuxjmwykaipwhbdfawg.supabase.co'
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
 
-if (!SUPABASE_ANON_KEY) {
+if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.error(
-    '[dabble] VITE_SUPABASE_ANON_KEY is not set — realtime sync and persistence are disabled. ' +
-      'Copy .env.example to .env and fill it in.',
+    '[dabble] VITE_SUPABASE_URL and/or VITE_SUPABASE_ANON_KEY are not set — ' +
+      'realtime sync and persistence are disabled. Copy .env.example to .env and fill it in.',
   )
 }
 
-export const supabase = SUPABASE_ANON_KEY
-  ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+export const supabase =
+  SUPABASE_URL && SUPABASE_ANON_KEY
+    ? createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       realtime: { params: { eventsPerSecond: 40 } },
       auth: { persistSession: true, autoRefreshToken: true },
     })
