@@ -2,6 +2,10 @@ export const PAPER_SIZE = 2000
 export const MIN_SCALE = 0.15
 export const MAX_SCALE = 8
 
+// Px of paper that must stay on screen while panning or restoring a shared
+// view (?x=&y=&z=). Shared by DrawingApp and viewUrl.js.
+export const MIN_VISIBLE = 100
+
 export const INK_MAX = 100
 export const INK_REFILL_PER_SEC = 12
 

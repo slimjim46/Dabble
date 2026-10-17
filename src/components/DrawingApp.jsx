@@ -13,6 +13,7 @@ import {
   MAX_REMOTE_CURSORS,
   MAX_SCALE,
   MIN_SCALE,
+  MIN_VISIBLE,
   PAPER_SIZE,
   POINT_MIN_DIST_SCREEN,
   SIMPLIFY_EPSILON_SCREEN,
@@ -25,11 +26,11 @@ import { strokesNear } from '../lib/strokeApi.js'
 import { isSupabaseEnabled, supabase } from '../lib/supabase.js'
 import { drawStroke, segmentCost, simplifyPoints } from '../lib/stroke.js'
 import { newStrokeId } from '../lib/strokeCodec.js'
+import { buildShareUrl, parseViewParams } from '../lib/viewUrl.js'
 import StatusPill from './StatusPill.jsx'
 import Toolbar from './Toolbar.jsx'
 import Leaderboard from './Leaderboard.jsx'
 
-const MIN_VISIBLE = 100 // px of paper that must stay on screen while panning
 const STALE_LIVE_MS = 15000 // drop other people's unfinished strokes after this
 
 function clamp(value, min, max) {
@@ -58,6 +59,7 @@ export default function DrawingApp() {
   const [reportTarget, setReportTarget] = useState(null) // { stroke, x, y, baked }
   const [renameErrorCode, setRenameErrorCode] = useState(null)
   const [reportThanks, setReportThanks] = useState(false)
+  const [shareNotice, setShareNotice] = useState(false)
 
   const viewRef = useRef({ x: 0, y: 0, scale: 1 })
   const liveStrokeRef = useRef(null)
@@ -74,6 +76,7 @@ export default function DrawingApp() {
   const cancelledRef = useRef(false)
   const flashTimerRef = useRef(0)
   const thanksTimerRef = useRef(0)
+  const shareTimerRef = useRef(0)
   const reportTapRef = useRef(0)
 
   colorRef.current = color
@@ -169,13 +172,23 @@ export default function DrawingApp() {
 
   useEffect(() => {
     resizeCanvas()
-    centerView()
+    // A shared link (?x=&y=&z=) opens the canvas at that spot; anything missing
+    // or malformed falls back to centering. parseViewParams clamps untrusted
+    // values, so a hostile link cannot push the view off-screen.
     const wrap = wrapRef.current
     if (!wrap) return undefined
+    const rect = wrap.getBoundingClientRect()
+    const shared = parseViewParams(window.location.search, { width: rect.width, height: rect.height })
+    if (shared) {
+      viewRef.current = shared
+      scheduleDraw()
+    } else {
+      centerView()
+    }
     const observer = new ResizeObserver(() => resizeCanvas())
     observer.observe(wrap)
     return () => observer.disconnect()
-  }, [resizeCanvas, centerView])
+  }, [resizeCanvas, centerView, scheduleDraw])
 
   useEffect(
     () => () => {
@@ -183,6 +196,7 @@ export default function DrawingApp() {
       rafRef.current = 0
       clearTimeout(flashTimerRef.current)
       clearTimeout(thanksTimerRef.current)
+      clearTimeout(shareTimerRef.current)
     },
     [],
   )
@@ -618,8 +632,24 @@ export default function DrawingApp() {
     [store, scheduleDraw],
   )
 
-  const commitRename = useCallback(async () => {
-    if (cancelledRef.current) {
+  const shareView = useCallback(async () => {
+    const url = buildShareUrl(window.location.href, viewRef.current)
+    try {
+      if (navigator.share) {
+        await navigator.share({ title: 'Dabble', url })
+        return
+      }
+      await navigator.clipboard.writeText(url)
+    } catch {
+      // A cancelled share sheet or a blocked clipboard: nothing to show.
+      return
+    }
+    setShareNotice(true)
+    clearTimeout(shareTimerRef.current)
+    shareTimerRef.current = setTimeout(() => setShareNotice(false), 2000)
+  }, [])
+
+  const commitRename = useCallback(async () => {    if (cancelledRef.current) {
       cancelledRef.current = false
       return
     }
@@ -667,6 +697,16 @@ export default function DrawingApp() {
         🎯
       </button>
 
+      <button
+        type="button"
+        className="recenter-button share-button"
+        onClick={shareView}
+        title="Share this spot"
+        aria-label="Share this spot"
+      >
+        <ShareIcon />
+      </button>
+
       {(nameRejected || renameErrorCode) && !editingName && (
         <div className="name-notice">
           {renameErrorCode === 'PT429'
@@ -678,6 +718,8 @@ export default function DrawingApp() {
       {banned && <div className="banned-notice">Drawing is paused for this session</div>}
 
       {reportThanks && <div className="report-thanks">Reported, thanks</div>}
+
+      {shareNotice && <div className="share-notice">Link copied</div>}
 
       <div className="name-pill">
         {editingName ? (
@@ -750,5 +792,21 @@ export default function DrawingApp() {
         </div>
       )}
     </div>
+  )
+}
+
+function ShareIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <circle cx="15" cy="4" r="2.4" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="5" cy="10" r="2.4" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="15" cy="16" r="2.4" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M7.1 8.9 12.9 5.1M7.1 11.1l5.8 3.8"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
   )
 }
