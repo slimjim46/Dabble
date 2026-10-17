@@ -6,6 +6,7 @@
  * Lives outside React: the hot path (drawing, remote points) never re-renders.
  * Events: 'add' (one stroke), 'remove' (one id), 'bulk' (many added), 'meta'.
  */
+import { REMOTE_LIVE_STROKE_LIMIT } from '../lib/constants.js'
 export function createStrokeStore() {
   const strokes = new Map()
   const live = new Map()
@@ -82,8 +83,12 @@ export function createStrokeStore() {
     },
 
     // ---- other people's in-progress strokes --------------------------------
+    // Capped so a hostile sender cannot exhaust memory with fake live strokes;
+    // extra starts beyond the cap are ignored (returns false).
     startLive(key, stroke) {
+      if (!live.has(key) && live.size >= REMOTE_LIVE_STROKE_LIMIT) return false
       live.set(key, { ...stroke, seq: 0, updatedAt: performance.now() })
+      return true
     },
     getLive: (key) => live.get(key),
     endLive(key, id) {

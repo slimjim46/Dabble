@@ -5,6 +5,22 @@ export const MAX_SCALE = 8
 export const INK_MAX = 100
 export const INK_REFILL_PER_SEC = 12
 
+// Server-side mirrors of public.dabble_limits()
+// (supabase/migrations/20261017230200_phase6_limits_trigger.sql). Change both
+// together: the database is the authority, these only shape client UX.
+export const INK_SERVER_CAPACITY = 150 // 1.5 x INK_MAX
+export const MAX_STROKES_PER_MINUTE = 60
+export const MAX_REPORTS_TO_HIDE = 3
+export const MIN_REPORTER_AGE_MINUTES = 10
+export const MAX_REPORTS_PER_MINUTE = 10
+export const MAX_RENAMES_PER_HOUR = 5
+
+// Incoming flood protection (receivers cannot be validated by the database).
+export const REMOTE_LIVE_STROKE_LIMIT = 200
+export const REMOTE_STARTS_PER_WINDOW = 12
+export const REMOTE_STARTS_WINDOW_MS = 10000
+export const REMOTE_POINTS_PER_MINUTE = 12000
+
 export const POINT_MIN_DIST_SCREEN = 2
 export const SIMPLIFY_EPSILON_SCREEN = 0.6
 

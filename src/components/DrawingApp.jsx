@@ -16,6 +16,9 @@ import {
   SIMPLIFY_EPSILON_SCREEN,
 } from '../lib/constants.js'
 import { loadIdentity, saveIdentity } from '../lib/identity.js'
+import { hitTest } from '../engine/hitTest.js'
+import { isReported, markReported, visibleToMe } from '../lib/reportedStrokes.js'
+import { isSupabaseEnabled, supabase } from '../lib/supabase.js'
 import { drawStroke, simplifyPoints } from '../lib/stroke.js'
 import { newStrokeId } from '../lib/strokeCodec.js'
 import StatusPill from './StatusPill.jsx'
@@ -46,6 +49,9 @@ export default function DrawingApp() {
   const [nameDraft, setNameDraft] = useState(identity.name)
   const [editingName, setEditingName] = useState(false)
   const [inkFlashing, setInkFlashing] = useState(false)
+  const [reportMode, setReportMode] = useState(false)
+  const [reportTarget, setReportTarget] = useState(null) // { stroke, x, y }
+  const [renameErrorCode, setRenameErrorCode] = useState(null)
 
   const viewRef = useRef({ x: 0, y: 0, scale: 1 })
   const liveStrokeRef = useRef(null)
@@ -63,6 +69,8 @@ export default function DrawingApp() {
 
   colorRef.current = color
   widthRef.current = brushWidth
+  const reportModeRef = useRef(false)
+  reportModeRef.current = reportMode
 
   // ---- rendering ------------------------------------------------------------
   const scheduleDraw = useCallback(() => {
@@ -170,20 +178,25 @@ export default function DrawingApp() {
   )
 
   // ---- realtime ---------------------------------------------------------------
-  const { api, status, online, saving } = useRealtimeCanvas({
-    identityRef,
-    store,
-    cursors,
-    name,
-    color,
-    onVisualChange: scheduleDraw,
-  })
+  const { api, status, online, saving, banned, nameRejected, clearNameNotice } =
+    useRealtimeCanvas({
+      identityRef,
+      store,
+      cursors,
+      name,
+      color,
+      onVisualChange: scheduleDraw,
+    })
 
-  // Keep the cached paper bitmap in step with the stroke store.
+  // Keep the cached paper bitmap in step with the stroke store. Strokes this
+  // visitor reported are filtered out of their own view (6.6.2).
   useEffect(() => {
     return store.subscribe((type, payload) => {
-      if (type === 'add') paperRef.current.append(payload)
-      else if (type === 'remove' || type === 'bulk') paperRef.current.rebuild(store.values())
+      if (type === 'add') {
+        if (!isReported(payload.id)) paperRef.current.append(payload)
+      } else if (type === 'remove' || type === 'bulk') {
+        paperRef.current.rebuild(visibleToMe(store.values()))
+      }
       setCanUndo(store.hasOwn(identityRef.current.id))
       scheduleDraw()
     })
@@ -270,6 +283,7 @@ export default function DrawingApp() {
 
   const startStroke = useCallback(
     (clientX, clientY) => {
+      if (banned) return null
       if (inkRef.current < 2) {
         triggerInkFlash()
         return null
@@ -287,7 +301,7 @@ export default function DrawingApp() {
       scheduleDraw()
       return stroke
     },
-    [api, screenToWorld, scheduleDraw, triggerInkFlash],
+    [api, screenToWorld, scheduleDraw, triggerInkFlash, banned],
   )
 
   const endStroke = useCallback(() => {
@@ -408,9 +422,26 @@ export default function DrawingApp() {
       }
 
       if (e.button !== 0) return
+      if (reportModeRef.current) {
+        // Report mode: one tap hit-tests committed strokes (6.6.1). No stroke
+        // starts here, and nothing is scanned per pointer move.
+        const world = screenToWorld(e.clientX, e.clientY)
+        const hit = hitTest(visibleToMe(store.values()), world, viewRef.current.scale)
+        if (hit) {
+          const pad = 100
+          setReportTarget({
+            stroke: hit,
+            x: clamp(e.clientX, pad, window.innerWidth - pad),
+            y: clamp(e.clientY, pad + 44, window.innerHeight - pad),
+          })
+        } else {
+          setReportTarget(null)
+        }
+        return
+      }
       startStroke(e.clientX, e.clientY)
     },
-    [beginGesture, startStroke],
+    [beginGesture, screenToWorld, startStroke, store],
   )
 
   const onPointerMove = useCallback(
@@ -515,7 +546,7 @@ export default function DrawingApp() {
     return () => canvas.removeEventListener('wheel', onWheel)
   }, [onWheel])
 
-  // ---- undo / rename ------------------------------------------------------------
+  // ---- undo / rename / report ------------------------------------------------
   const undo = useCallback(() => {
     const mine = store.lastOwn(identityRef.current.id)
     if (!mine) return
@@ -523,20 +554,47 @@ export default function DrawingApp() {
     api.removeStroke(mine.id) // hides it in the database and tells everyone
   }, [store, api])
 
-  const commitRename = useCallback(() => {
+  const handleReport = useCallback(
+    (stroke) => {
+      setReportTarget(null)
+      // Hidden locally right away, whether or not the server agrees yet.
+      markReported(stroke.id)
+      paperRef.current.rebuild(visibleToMe(store.values()))
+      scheduleDraw()
+      supabase?.rpc('report_stroke', { p_stroke_id: stroke.id }).catch(() => {})
+    },
+    [store, scheduleDraw],
+  )
+
+  const commitRename = useCallback(async () => {
     if (cancelledRef.current) {
       cancelledRef.current = false
       return
     }
     const current = identityRef.current
     const next = nameDraft.trim() || current.name
+    if (next !== current.name && isSupabaseEnabled()) {
+      // Server is the authority on names; on rejection keep the old one.
+      const { data, error } = await supabase.auth.getSession()
+      if (!error && data.session) {
+        const { error: rpcError } = await supabase.rpc('set_my_name', { new_name: next })
+        if (rpcError) {
+          setRenameErrorCode(rpcError.code || '22023')
+          setNameDraft(current.name)
+          setEditingName(false)
+          return
+        }
+      }
+    }
+    setRenameErrorCode(null)
+    clearNameNotice()
     const updated = { ...current, name: next }
     saveIdentity(updated)
     identityRef.current = updated
     setName(next)
     setNameDraft(next)
     setEditingName(false)
-  }, [nameDraft])
+  }, [nameDraft, clearNameNotice])
 
   return (
     <div ref={wrapRef} className="draw-wrap">
@@ -554,6 +612,16 @@ export default function DrawingApp() {
       <button type="button" className="recenter-button" onClick={centerView} title="Recenter view">
         🎯
       </button>
+
+      {(nameRejected || renameErrorCode) && !editingName && (
+        <div className="name-notice">
+          {renameErrorCode === 'PT429'
+            ? 'Name changes are limited — try again later'
+            : "That name isn't available"}
+        </div>
+      )}
+
+      {banned && <div className="banned-notice">Drawing is paused for this session</div>}
 
       <div className="name-pill">
         {editingName ? (
@@ -598,7 +666,33 @@ export default function DrawingApp() {
         inkFlashing={inkFlashing}
         canUndo={canUndo}
         onUndo={undo}
+        reportMode={reportMode}
+        onToggleReport={() => {
+          setReportMode((v) => {
+            if (v) setReportTarget(null)
+            return !v
+          })
+        }}
       />
+
+      {reportTarget && (
+        <div className="report-popover" style={{ left: reportTarget.x, top: reportTarget.y }}>
+          <span className="report-author" title={reportTarget.stroke.userName}>
+            {reportTarget.stroke.userName}
+          </span>
+          <button type="button" className="report-go" onClick={() => handleReport(reportTarget.stroke)}>
+            Report
+          </button>
+          <button
+            type="button"
+            className="report-close"
+            onClick={() => setReportTarget(null)}
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
+      )}
     </div>
   )
 }

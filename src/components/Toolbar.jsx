@@ -25,6 +25,8 @@ export default function Toolbar({
   inkFlashing,
   canUndo,
   onUndo,
+  reportMode,
+  onToggleReport,
 }) {
   const inkPercent = Math.round((ink / inkMax) * 100)
 
@@ -75,8 +77,38 @@ export default function Toolbar({
         >
           <UndoIcon />
         </button>
+
+        <button
+          type="button"
+          className={`undo-button ${reportMode ? 'report-active' : ''}`}
+          onClick={onToggleReport}
+          aria-pressed={reportMode}
+          aria-label="Report a stroke"
+          title={reportMode ? 'Reporting: tap a stroke' : 'Report a stroke'}
+        >
+          <FlagIcon />
+        </button>
       </div>
     </div>
+  )
+}
+
+function FlagIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path
+        d="M5 3v14"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+      />
+      <path
+        d="M5 4h9.5l-2 3 2 3H5"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinejoin="round"
+      />
+    </svg>
   )
 }
 

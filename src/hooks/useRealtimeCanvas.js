@@ -4,6 +4,9 @@ import {
   CURSOR_FLUSH_MS,
   LIVE_FLUSH_MS,
   MAX_LIVE_POINTS,
+  REMOTE_POINTS_PER_MINUTE,
+  REMOTE_STARTS_PER_WINDOW,
+  REMOTE_STARTS_WINDOW_MS,
 } from '../lib/constants.js'
 import { saveIdentity } from '../lib/identity.js'
 import { createPersistQueue } from '../lib/persistQueue.js'
@@ -40,7 +43,7 @@ const BROADCAST_EVENTS = [
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
 function sendBroadcast(s, event, payload) {
-  if (!s.channel || !s.subscribed) return
+  if (!s.channel || !s.subscribed || s.banned) return
   Promise.resolve(s.channel.send({ type: 'broadcast', event, payload })).catch(() => {})
 }
 
@@ -76,6 +79,8 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, on
   const [status, setStatus] = useState(supabase ? 'connecting' : 'offline')
   const [online, setOnline] = useState(1)
   const [saving, setSaving] = useState(true)
+  const [banned, setBanned] = useState(false)
+  const [nameRejected, setNameRejected] = useState(false)
 
   const ref = useRef(null)
   if (!ref.current) {
@@ -89,6 +94,7 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, on
       cursorDirty: false,
       presence: { name, color },
       watermark: null, // created_at of the newest row we've seen
+      banned: false, // set after sign-in when players.banned is true
       queue: createPersistQueue({
         getUserId: async () => (await ensureAnonymousAuth())?.id ?? null,
       }),
@@ -123,7 +129,7 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, on
         if (s.live?.id === stroke.id) s.live = null
         s.pending = []
         sendBroadcast(s, 'stroke_end', { k: s.key, stroke: strokeToBroadcast(stroke) })
-        if (supabase) s.queue.add(stroke)
+        if (supabase && !s.banned) s.queue.add(stroke)
       },
 
       strokeCancel(id) {
@@ -181,6 +187,27 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, on
             store.reassignUser(previous.id, user.id)
           }
           setSaving(true)
+          // Keep the stored name in step with the local guest name (6.3).
+          // Only a genuine rejection (blocked name) surfaces a notice; a
+          // network hiccup here is not the visitor's problem.
+          supabase
+            .rpc('set_my_name', { new_name: identityRef.current.name })
+            .then(({ error }) => {
+              if (!cancelled && error?.code === '22023') setNameRejected(true)
+            })
+            .catch(() => {})
+          // Quiet banned feedback: no broadcasts, no saves, muted notice.
+          supabase
+            .from('players')
+            .select('banned')
+            .eq('id', user.id)
+            .maybeSingle()
+            .then(({ data, error }) => {
+              if (cancelled || error || !data?.banned) return
+              ref.current.banned = true
+              setBanned(true)
+            })
+            .catch(() => {})
           return
         }
         await sleep(2000 * (attempt + 1))
@@ -212,6 +239,35 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, on
       const buffer = []
       const verifyTimers = new Set()
 
+      // Broadcasts are not validated by the database, so receivers protect
+      // themselves: per-sender start and point budgets, silently enforced.
+      const senderStats = new Map() // sender key -> { starts: number[], points, pointsAt }
+      function allowStart(key) {
+        const now = Date.now()
+        let stats = senderStats.get(key)
+        if (!stats) {
+          stats = { starts: [], points: 0, pointsAt: now }
+          if (senderStats.size > 500) senderStats.clear()
+          senderStats.set(key, stats)
+        }
+        stats.starts = stats.starts.filter((t) => now - t < REMOTE_STARTS_WINDOW_MS)
+        if (stats.starts.length >= REMOTE_STARTS_PER_WINDOW) return false
+        stats.starts.push(now)
+        return true
+      }
+      function allowPointNumbers(key, count) {
+        const stats = senderStats.get(key)
+        if (!stats) return false
+        const now = Date.now()
+        if (now - stats.pointsAt >= 60000) {
+          stats.pointsAt = now
+          stats.points = 0
+        }
+        if (stats.points + count > REMOTE_POINTS_PER_MINUTE) return false
+        stats.points += count
+        return true
+      }
+
       const channel = supabase.channel(CHANNEL_NAME, {
         config: { broadcast: { self: false }, presence: { key: s.key } },
       })
@@ -223,15 +279,16 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, on
           case 'stroke_start': {
             const p = parseStrokeStart(payload)
             if (!p || p.k === s.key || store.has(p.id)) return
+            if (!allowStart(p.k)) return
             const points = decodePoints(p.pts)
-            store.startLive(p.k, {
+            if (!store.startLive(p.k, {
               id: p.id,
               userId: p.userId,
               userName: p.userName,
               color: p.color,
               width: p.width,
               points,
-            })
+            })) return
             cursors.update(p.k, points[0].x, points[0].y)
             break
           }
@@ -242,6 +299,7 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, on
             const live = store.getLive(p.k)
             if (!live || live.id !== p.id || p.seq <= live.seq) return
             if (live.points.length >= MAX_LIVE_POINTS + 50) return
+            if (!allowPointNumbers(p.k, p.pts.length)) return
             const points = decodePoints(p.pts)
             for (const point of points) live.points.push(point)
             live.seq = p.seq
@@ -306,7 +364,12 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, on
           if (buffer.length < 2000) buffer.push([event, payload])
           return
         }
-        dispatch(event, payload)
+        // A malformed or hostile broadcast is dropped, never thrown.
+        try {
+          dispatch(event, payload)
+        } catch (error) {
+          console.warn('[dabble] dropped bad broadcast', event, error)
+        }
       }
       for (const event of BROADCAST_EVENTS) {
         channel.on('broadcast', { event }, receive(event))
@@ -378,7 +441,13 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, on
         if (disposed) return
         joined = true
         buffering = false
-        for (const [event, payload] of buffer.splice(0)) dispatch(event, payload)
+        for (const [event, payload] of buffer.splice(0)) {
+          try {
+            dispatch(event, payload)
+          } catch (error) {
+            console.warn('[dabble] dropped bad broadcast', event, error)
+          }
+        }
         onVisualChange()
         if (!loaded) scheduleRetry()
       }
@@ -471,5 +540,13 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, on
     }
   }, [store, cursors, onVisualChange])
 
-  return { api, status, online, saving }
+  return {
+    api,
+    status,
+    online,
+    saving,
+    banned,
+    nameRejected,
+    clearNameNotice: () => setNameRejected(false),
+  }
 }

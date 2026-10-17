@@ -283,3 +283,202 @@ body,
   60% { transform: translateX(-2px); }
   80% { transform: translateX(2px); }
 }
+
+/* ---- Phase 6: report mode, notices ---- */
+.report-active {
+  color: #e5484d;
+  border-color: rgba(229, 72, 77, 0.5);
+}
+
+.name-notice {
+  position: absolute;
+  top: calc(max(10px, env(safe-area-inset-top)) + 40px);
+  left: 10px;
+  z-index: 2;
+  font-size: 12px;
+  color: var(--ui-muted);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  padding: 4px 8px;
+  pointer-events: none;
+}
+
+.banned-notice {
+  position: absolute;
+  top: calc(max(10px, env(safe-area-inset-top)) + 40px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  font-size: 12px;
+  color: var(--ui-muted);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 4px 10px;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.report-popover {
+  position: absolute;
+  z-index: 3;
+  transform: translate(-50%, 14px);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ui-text);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 10px;
+  padding: 6px 8px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.report-author {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.report-popover button {
+  font: inherit;
+  font-size: 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: 7px;
+  background: transparent;
+  color: inherit;
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+.report-popover .report-go {
+  color: #e5484d;
+  border-color: rgba(229, 72, 77, 0.5);
+}
+
+.report-popover .report-close {
+  padding: 4px 6px;
+}
+
+/* ---- Phase 6: admin page (/admin) ---- */
+.admin-loading {
+  display: grid;
+  place-items: center;
+  height: 100dvh;
+  color: var(--ui-muted);
+}
+
+.admin-shell {
+  min-height: 100dvh;
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  padding: 24px 16px 64px;
+}
+
+.admin-shell > * {
+  max-width: 880px;
+  margin-inline: auto;
+}
+
+.admin-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.admin-header h1 {
+  font-size: 18px;
+  margin: 0;
+  margin-right: auto;
+}
+
+.admin-tabs,
+.admin-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.admin-tabs button,
+.admin-actions button,
+.admin-card button,
+.admin-card input {
+  font: inherit;
+  font-size: 13px;
+  color: var(--ui-text);
+  background: transparent;
+  border: 1px solid var(--ui-border);
+  border-radius: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.admin-tab-active {
+  background: var(--ui-border);
+}
+
+.admin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  padding: 16px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  .admin-card {
+    background: rgba(0, 0, 0, 0.25);
+  }
+}
+
+.admin-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.admin-row {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 16px;
+}
+
+.admin-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.admin-muted {
+  color: var(--ui-muted);
+  font-size: 13px;
+}
+
+.admin-error {
+  color: #e5484d;
+  font-size: 13px;
+}
+
+.admin-notice {
+  color: #30a46c;
+  font-size: 13px;
+}
+
+.admin-reports {
+  color: #f5a623;
+  font-size: 13px;
+}
+
+.admin-hidden {
+  color: #e5484d;
+  font-size: 13px;
+}
