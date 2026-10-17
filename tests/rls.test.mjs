@@ -374,5 +374,13 @@ const adminCalls = [
     `anon=${code(anonErr) || 'accepted'} stats=${code(statsErr) || statKeys.join('/')} board=${code(boardErr) || rowKeys.join('/')} leak=${noUserIds && noBoardLeak} bad=${code(badWindow) || 'accepted'}`)
 }
 
+// ---- cleanup -------------------------------------------------------------
+// Dev-only helper: hide everything this run (and previous ones) left visible,
+// so the dev canvas does not accumulate test scribbles.
+{
+  const { data, error } = await A.c.rpc('dev_only_hide_all_strokes')
+  console.log(`\ncanvas reset: ${error ? `failed (${code(error)} ${error.message})` : `${data} stroke(s) hidden`}`)
+}
+
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)

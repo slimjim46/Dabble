@@ -19,6 +19,11 @@ Then open the URL printed in the terminal (usually http://localhost:5173).
 Vercel Functions, so use `vercel dev` (with the Supabase env vars set) to
 exercise sessions and heartbeats locally.
 
+Clients cannot delete strokes, so test runs would fill the dev canvas with
+scribbles. The end-to-end suites therefore call the dev-only helper
+`dev_only_hide_all_strokes()` (see `supabase/dev/`) when they finish, which
+hides whatever is visible and leaves the board clear.
+
 ## Privacy
 
 Dabble is anonymous by design. When you visit we create an anonymous account

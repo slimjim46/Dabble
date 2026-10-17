@@ -52,6 +52,20 @@ const { data: auth, error: signInError } = await supabase.auth.signInAnonymously
 check('anonymous sign-in', !signInError, signInError?.message)
 const uid = auth.user.id
 
+// A background stroke from a second user so the history check does not depend
+// on the dev canvas already having content (the other suites empty it).
+const background = createClient(URL, KEY, { auth: { persistSession: false } })
+await background.auth.signInAnonymously()
+const { error: backgroundErr } = await background.from('strokes').insert({
+  id: crypto.randomUUID(),
+  user_name: 'Background',
+  color: '#30a46c',
+  width: 4,
+  points: [10, 10, 20, 20, 30, 12],
+  hidden: false,
+})
+check('seed a background stroke', !backgroundErr, backgroundErr?.message)
+
 // 1. Load history (what the app does on startup).
 const history = await loadVisible(supabase)
 check('loads existing visible strokes', history.length > 0, `got ${history.length}`)
@@ -119,6 +133,13 @@ const { data: otherUpdate } = await other
   .eq('id', myStroke.id)
   .select('id')
 check('other user cannot unhide my stroke', (otherUpdate?.length ?? 0) === 0)
+
+// Cleanup: dev-only helper hides every visible stroke, so repeated runs (and
+// the manual tests) do not pile up scribbles on the dev canvas.
+{
+  const { data, error } = await other.rpc('dev_only_hide_all_strokes')
+  console.log(`\ncanvas reset: ${error ? `failed (${error.message})` : `${data} stroke(s) hidden`}`)
+}
 
 console.log(`\n${pass} passed, ${fail} failed`)
 process.exit(fail === 0 ? 0 : 1)
