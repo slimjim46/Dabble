@@ -77,6 +77,22 @@ strokes** before strokes alone become a problem. Snapshots are small by
 comparison: a blank 2000×2000 PNG is ~19 KB, a busy one a few MB, and only 24
 exist at a time (worst case ~50 MB of the 1 GB storage allowance).
 
+### Baked strokes and moderation
+
+A stroke that is already baked into the snapshot PNG is a flat image on
+everyone's screen. If it is later hidden (admin hide, report auto-hide,
+ban-with-hide) it does **not** vanish for people who are already connected —
+there is nothing to erase without repainting the whole PNG. It disappears on
+the next **full** rebuild, which the render script forces as soon as a baked-in
+stroke changed visibility (`strokes.hidden_at`), and always within 24 hours.
+Incremental runs only add newer strokes, so they can't remove a baked one. This
+is deliberate: we don't try to paint over the snapshot client-side.
+
+The same applies to reporting from your own screen: tapping a baked stroke opens
+the normal report popover (looked up server-side through `strokes_near`), but on
+confirm it only records the id in `dabble:reported` and shows a thank-you. The
+server hides the stroke at three reports and the next full snapshot drops it.
+
 ### Archive plan (not built)
 
 When the table approaches ~200,000 strokes, archive everything already baked

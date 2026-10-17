@@ -21,6 +21,7 @@ import {
 import { loadIdentity, saveIdentity } from '../lib/identity.js'
 import { hitTest } from '../engine/hitTest.js'
 import { isReported, markReported, visibleToMe } from '../lib/reportedStrokes.js'
+import { strokesNear } from '../lib/strokeApi.js'
 import { isSupabaseEnabled, supabase } from '../lib/supabase.js'
 import { drawStroke, segmentCost, simplifyPoints } from '../lib/stroke.js'
 import { newStrokeId } from '../lib/strokeCodec.js'
@@ -53,8 +54,9 @@ export default function DrawingApp() {
   const [editingName, setEditingName] = useState(false)
   const [inkFlashing, setInkFlashing] = useState(false)
   const [reportMode, setReportMode] = useState(false)
-  const [reportTarget, setReportTarget] = useState(null) // { stroke, x, y }
+  const [reportTarget, setReportTarget] = useState(null) // { stroke, x, y, baked }
   const [renameErrorCode, setRenameErrorCode] = useState(null)
+  const [reportThanks, setReportThanks] = useState(false)
 
   const viewRef = useRef({ x: 0, y: 0, scale: 1 })
   const liveStrokeRef = useRef(null)
@@ -70,6 +72,8 @@ export default function DrawingApp() {
   const identityRef = useRef(identity)
   const cancelledRef = useRef(false)
   const flashTimerRef = useRef(0)
+  const thanksTimerRef = useRef(0)
+  const reportTapRef = useRef(0)
 
   colorRef.current = color
   widthRef.current = brushWidth
@@ -177,6 +181,7 @@ export default function DrawingApp() {
       cancelAnimationFrame(rafRef.current)
       rafRef.current = 0
       clearTimeout(flashTimerRef.current)
+      clearTimeout(thanksTimerRef.current)
     },
     [],
   )
@@ -184,6 +189,16 @@ export default function DrawingApp() {
   // ---- sessions + live stats --------------------------------------------------
   const { country } = useSession()
   const liveStats = useLiveStats()
+
+  // The baked snapshot is painted straight onto the paper cache so the canvas
+  // shows up before the newer strokes have loaded.
+  const loadBase = useCallback(
+    (image) => {
+      paperRef.current.setBase(image)
+      scheduleDraw()
+    },
+    [scheduleDraw],
+  )
 
   // ---- realtime ---------------------------------------------------------------
   const { api, status, online, saving, banned, nameRejected, clearNameNotice } =
@@ -195,6 +210,7 @@ export default function DrawingApp() {
       color,
       country,
       onVisualChange: scheduleDraw,
+      loadBase,
     })
 
   // Keep the cached paper bitmap in step with the stroke store. Strokes this
@@ -437,20 +453,29 @@ export default function DrawingApp() {
 
       if (e.button !== 0) return
       if (reportModeRef.current) {
-        // Report mode: one tap hit-tests committed strokes (6.6.1). No stroke
-        // starts here, and nothing is scanned per pointer move.
+        // Report mode: one tap hit-tests committed strokes (6.6.1); a miss asks
+        // the server for baked strokes nearby (one RPC per tap). Nothing is
+        // scanned per pointer move.
+        const pad = 100
         const world = screenToWorld(e.clientX, e.clientY)
+        const x = clamp(e.clientX, pad, window.innerWidth - pad)
+        const y = clamp(e.clientY, pad + 44, window.innerHeight - pad)
         const hit = hitTest(visibleToMe(store.values()), world, viewRef.current.scale)
         if (hit) {
-          const pad = 100
-          setReportTarget({
-            stroke: hit,
-            x: clamp(e.clientX, pad, window.innerWidth - pad),
-            y: clamp(e.clientY, pad + 44, window.innerHeight - pad),
-          })
-        } else {
-          setReportTarget(null)
+          setReportTarget({ stroke: hit, x, y })
+          return
         }
+        const tap = ++reportTapRef.current
+        strokesNear(world.x, world.y)
+          .then((near) => {
+            if (tap !== reportTapRef.current) return
+            // strokes_near is newest-first; hitTest expects oldest-first.
+            const baked = hitTest(near.slice().reverse(), world, viewRef.current.scale)
+            setReportTarget(baked ? { stroke: baked, x, y, baked: true } : null)
+          })
+          .catch(() => {
+            if (tap === reportTapRef.current) setReportTarget(null)
+          })
         return
       }
       startStroke(e.clientX, e.clientY)
@@ -569,13 +594,25 @@ export default function DrawingApp() {
   }, [store, api])
 
   const handleReport = useCallback(
-    (stroke) => {
+    (target) => {
+      const stroke = target.stroke
       setReportTarget(null)
-      // Hidden locally right away, whether or not the server agrees yet.
+      // Hidden for this visitor right away, whether or not the server agrees yet.
       markReported(stroke.id)
+      // PostgREST builders are lazy and expose only .then(), so wrap in a real
+      // promise: .catch() on the builder itself would throw (and never send).
+      Promise.resolve(supabase?.rpc('report_stroke', { p_stroke_id: stroke.id })).catch(() => {})
+      if (target.baked) {
+        // The stroke is painted into the snapshot PNG, so it cannot be erased
+        // locally: the server hides it at 3 reports and the next full snapshot
+        // drops it. Just confirm (Phase 5b).
+        setReportThanks(true)
+        clearTimeout(thanksTimerRef.current)
+        thanksTimerRef.current = setTimeout(() => setReportThanks(false), 2000)
+        return
+      }
       paperRef.current.rebuild(visibleToMe(store.values()))
       scheduleDraw()
-      supabase?.rpc('report_stroke', { p_stroke_id: stroke.id }).catch(() => {})
     },
     [store, scheduleDraw],
   )
@@ -637,6 +674,8 @@ export default function DrawingApp() {
 
       {banned && <div className="banned-notice">Drawing is paused for this session</div>}
 
+      {reportThanks && <div className="report-thanks">Reported, thanks</div>}
+
       <div className="name-pill">
         {editingName ? (
           <input
@@ -694,7 +733,7 @@ export default function DrawingApp() {
           <span className="report-author" title={reportTarget.stroke.userName}>
             {reportTarget.stroke.userName}
           </span>
-          <button type="button" className="report-go" onClick={() => handleReport(reportTarget.stroke)}>
+          <button type="button" className="report-go" onClick={() => handleReport(reportTarget)}>
             Report
           </button>
           <button

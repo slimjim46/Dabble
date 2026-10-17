@@ -10,7 +10,15 @@ import {
 } from '../lib/constants.js'
 import { saveIdentity } from '../lib/identity.js'
 import { createPersistQueue } from '../lib/persistQueue.js'
-import { fetchLatestStrokes, fetchStrokesSince, hideStroke, isStrokeVisible } from '../lib/strokeApi.js'
+import {
+  fetchLatestSnapshot,
+  fetchLatestStrokes,
+  fetchStrokesSince,
+  hideStroke,
+  isStrokeVisible,
+  loadSnapshotImage,
+  snapshotImageUrl,
+} from '../lib/strokeApi.js'
 import {
   broadcastToStroke,
   decodePoints,
@@ -75,7 +83,16 @@ async function hideWithRetry(id) {
  * `onVisualChange` asks the canvas to redraw. Returns a stable `api` object
  * for the drawing code to call, plus a few values for the status pill.
  */
-export function useRealtimeCanvas({ identityRef, store, cursors, name, color, country, onVisualChange }) {
+export function useRealtimeCanvas({
+  identityRef,
+  store,
+  cursors,
+  name,
+  color,
+  country,
+  onVisualChange,
+  loadBase,
+}) {
   const [status, setStatus] = useState(supabase ? 'connecting' : 'offline')
   const [online, setOnline] = useState(1)
   const [saving, setSaving] = useState(true)
@@ -395,10 +412,44 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, co
       })
 
       // -- history / catch-up ---------------------------------------------------
+      //
+      // First join prefers the baked snapshot: one PNG (everything older than
+      // the snapshot cutoff) plus the visible strokes created at/after its
+      // watermark. gte is fine — redrawing an opaque stroke is harmless. Any
+      // problem (no snapshot, image error/timeout, query error) silently falls
+      // back to loading the full stroke list, so the canvas always loads.
+      async function loadSnapshot() {
+        try {
+          const snapshot = await fetchLatestSnapshot()
+          if (disposed || !snapshot) return false
+          const url = snapshotImageUrl(snapshot.image_path)
+          if (!url) return false
+          const image = await loadSnapshotImage(url)
+          if (disposed) return false
+          if (loadBase) loadBase(image) // paint the baked canvas before the rest
+          const result = await fetchStrokesSince(snapshot.last_stroke_created_at)
+          if (disposed) return false
+          s.watermark = result.lastCreatedAt
+          store.addMany(result.strokes)
+          return true
+        } catch (error) {
+          if (!disposed) console.warn('[dabble] snapshot unavailable:', error?.message ?? error)
+          return false
+        }
+      }
+
       async function loadHistory() {
-        const result = s.watermark
-          ? await fetchStrokesSince(s.watermark)
-          : await fetchLatestStrokes()
+        if (s.watermark) {
+          const result = await fetchStrokesSince(s.watermark)
+          if (disposed) return
+          if (result.lastCreatedAt) s.watermark = result.lastCreatedAt
+          store.addMany(result.strokes)
+          return
+        }
+
+        if (await loadSnapshot()) return
+
+        const result = await fetchLatestStrokes()
         if (disposed) return
         if (result.lastCreatedAt) s.watermark = result.lastCreatedAt
         store.addMany(result.strokes)
@@ -538,7 +589,7 @@ export function useRealtimeCanvas({ identityRef, store, cursors, name, color, co
       clearTimeout(bootTimer)
       if (teardown) teardown()
     }
-  }, [store, cursors, onVisualChange])
+  }, [store, cursors, onVisualChange, loadBase])
 
   return {
     api,
