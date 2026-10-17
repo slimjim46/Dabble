@@ -646,3 +646,38 @@ body,
   margin-top: 4px;
   text-align: right;
 }
+
+
+/* ---- Phase 7: footer / about/privacy ---- */
+.status-bar {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+
+.status-pill {
+  position: static;
+  transform: none;
+}
+
+.status-footer {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--ui-muted);
+}
+
+.status-footer-item a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.status-footer-item a:hover {
+  text-decoration: underline;
+}

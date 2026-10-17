@@ -689,7 +689,7 @@ export default function DrawingApp() {
         onPointerCancel={cancelPointer}
       />
 
-      <StatusPill status={status} online={online} saving={saving} countries={liveStats?.countries} />
+      <StatusPill status={status} online={online} saving={saving} countries={liveStats?.countries} ownerName={import.meta.env.VITE_OWNER_NAME} ownerUrl={import.meta.env.VITE_OWNER_URL} privacyUrl={import.meta.env.VITE_PRIVACY_URL} />
 
       <Leaderboard country={country} />
 
