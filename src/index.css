@@ -499,3 +499,129 @@ body,
   color: #e5484d;
   font-size: 13px;
 }
+
+/* ---- Phase 7: country leaderboard ---- */
+.leaderboard {
+  position: absolute;
+  top: calc(max(10px, env(safe-area-inset-top)) + 46px);
+  right: 12px;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: calc(100vw - 24px);
+}
+
+.leaderboard-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--ui-text);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 6px 10px;
+  cursor: pointer;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  touch-action: manipulation;
+}
+
+.leaderboard-chevron {
+  color: var(--ui-muted);
+  font-size: 10px;
+}
+
+.leaderboard-card {
+  width: min(216px, calc(100vw - 24px));
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  padding: 8px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+}
+
+.leaderboard-windows {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.leaderboard-window {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ui-muted);
+  background: transparent;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.leaderboard-window-active {
+  color: var(--ui-text);
+  background: rgba(0, 0, 0, 0.06);
+}
+
+@media (prefers-color-scheme: dark) {
+  .leaderboard-window-active {
+    background: rgba(255, 255, 255, 0.12);
+  }
+}
+
+.leaderboard-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.leaderboard-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ui-text);
+  padding: 2px;
+}
+
+.leaderboard-me {
+  font-weight: 600;
+}
+
+.leaderboard-flag {
+  width: 18px;
+  text-align: center;
+}
+
+.leaderboard-code {
+  width: 22px;
+}
+
+.leaderboard-metrics {
+  color: var(--ui-muted);
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.leaderboard-empty,
+.leaderboard-legend {
+  font-size: 11px;
+  color: var(--ui-muted);
+  padding: 2px;
+}
+
+.leaderboard-legend {
+  margin-top: 4px;
+  text-align: right;
+}

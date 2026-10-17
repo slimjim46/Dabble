@@ -1,3 +1,5 @@
+import { flagEmoji } from '../lib/country.js'
+
 function roundedRect(ctx, x, y, w, h, r) {
   ctx.beginPath()
   ctx.moveTo(x + r, y)
@@ -6,12 +8,6 @@ function roundedRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, r)
   ctx.arcTo(x, y, x + w, y, r)
   ctx.closePath()
-}
-
-/** "DE" -> 🇩🇪 (regional indicator pair). Unknown codes return ''. */
-function flagEmoji(code) {
-  if (typeof code !== 'string' || !/^[A-Z]{2}$/.test(code)) return ''
-  return String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65))
 }
 
 /**

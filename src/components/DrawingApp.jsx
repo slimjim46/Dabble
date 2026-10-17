@@ -27,6 +27,7 @@ import { drawStroke, segmentCost, simplifyPoints } from '../lib/stroke.js'
 import { newStrokeId } from '../lib/strokeCodec.js'
 import StatusPill from './StatusPill.jsx'
 import Toolbar from './Toolbar.jsx'
+import Leaderboard from './Leaderboard.jsx'
 
 const MIN_VISIBLE = 100 // px of paper that must stay on screen while panning
 const STALE_LIVE_MS = 15000 // drop other people's unfinished strokes after this
@@ -659,6 +660,8 @@ export default function DrawingApp() {
       />
 
       <StatusPill status={status} online={online} saving={saving} countries={liveStats?.countries} />
+
+      <Leaderboard country={country} />
 
       <button type="button" className="recenter-button" onClick={centerView} title="Recenter view">
         🎯
