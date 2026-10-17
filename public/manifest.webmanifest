@@ -1,0 +1,21 @@
+{
+  "name": "Dabble",
+  "short_name": "Dabble",
+  "description": "Anonymous real-time collaborative drawing canvas.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ececef",
+  "theme_color": "#ececef",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
