@@ -232,7 +232,11 @@ export class Room {
     const userId = request.headers.get('X-User')
     if (!userId) return new Response('no user', { status: 401 })
 
-    if (request.headers.get('X-Action') === 'create') {
+    // Create is recognised by METHOD + PATH, never by a header: only the
+    // Worker constructs this internal URL, so clients cannot reach it and
+    // a client-supplied X-Action can never trigger a creation.
+    const url = new URL(request.url)
+    if (request.method === 'POST' && url.pathname === '/create') {
       const existing = await this.load()
       if (existing) return new Response('exists', { status: 409 })
       const now = Date.now()
@@ -249,9 +253,11 @@ export class Room {
       return new Response('created', { status: 201 })
     }
 
-    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+    const isJoin = request.method === 'GET' && url.pathname === '/ws'
+    if (isJoin && request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('upgrade required', { status: 426 })
     }
+    if (!isJoin) return new Response('not found', { status: 404 })
 
     // Proof the Worker never forwards the JWT: booleans only, never values.
     const jwtLike = [...request.headers.values()].some((v) => /^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\./.test(v))

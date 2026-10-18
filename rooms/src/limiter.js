@@ -1,4 +1,4 @@
-// Limiter DO: hourly room-creation budgets (5/user/h, 10/hashed-IP/h).
+// Limiter DO: hourly room-creation budgets (5/user/h, 30/hashed-IP/h).
 // One global instance; tiny state; an hourly alarm prunes stale buckets.
 //
 // Why a DO and not the Workers rate limiting binding: that binding only

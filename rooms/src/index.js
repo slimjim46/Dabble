@@ -11,8 +11,9 @@
 // client can show a friendly screen.
 import { verifyAccessToken } from './auth.js'
 import { isValidCode, randomCode } from './codes.js'
-import { CREATE_CODE_ATTEMPTS, MAX_NAME_LENGTH, MAX_ROOMS_PER_USER_PER_HOUR, maxRoomsPerIpPerHour } from './config.js'
-import { clientIpHash } from './hash.js'
+import { CREATE_CODE_ATTEMPTS, MAX_ROOMS_PER_USER_PER_HOUR, maxRoomsPerIpPerHour } from './config.js'
+import { buildJoinHeaders } from './forward.js'
+import { clientIpHash, ipHashSaltOk } from './hash.js'
 import { fetchIdentity } from './identity.js'
 import { Limiter } from './limiter.js'
 import { logEvent } from './log.js'
@@ -115,6 +116,13 @@ async function readBearer(request) {
 }
 
 async function createRoom(request, env) {
+  // Production without a usable IP hash salt means every per-IP limit is
+  // unenforceable: refuse to serve instead of serving unprotected.
+  if (!ipHashSaltOk(env)) {
+    logEvent('prod_salt_missing', { route: 'create' })
+    return roomsBusy('create')
+  }
+
   const origin = checkOrigin(request, env)
   const cors = corsHeaders(origin.origin, origin.ok)
   if (!origin.ok) {
@@ -168,7 +176,7 @@ async function createRoom(request, env) {
     try {
       res = await stub.fetch('https://room/create', {
         method: 'POST',
-        headers: { 'X-Action': 'create', 'X-User': claims.sub },
+        headers: { 'X-User': claims.sub },
       })
     } catch (e) {
       // Daily quota exhausted (or any DO call failure): friendly 503.
@@ -189,6 +197,13 @@ async function createRoom(request, env) {
 }
 
 async function joinRoom(request, env, url) {
+  // Fail closed before anything else spends a DO or binding: production
+  // without a usable IP hash salt cannot enforce the per-IP caps.
+  if (!ipHashSaltOk(env)) {
+    logEvent('prod_salt_missing', { route: 'join' })
+    return roomsBusy('join')
+  }
+
   // 1. Code format BEFORE any Durable Object is touched: junk probes can
   //    never spend a DO invocation.
   const room = (url.searchParams.get('room') || '').toUpperCase()
@@ -241,17 +256,16 @@ async function joinRoom(request, env, url) {
   if (quotaSimulated(env)) return roomsBusy('join')
 
   // 5. Forward the upgrade to the Room DO. The JWT never crosses this line:
-  //    the protocol header is deleted, any query token is dropped unread,
-  //    and only trusted fields are set.
+  //    the request is rebuilt from the allowlist in forward.js, so client
+  //    X-* headers (X-Action, X-IP-Hash, X-User*) never reach the DO and
+  //    Sec-WebSocket-Protocol (the token carrier) is never copied.
   url.searchParams.delete('token') // never read, only scrubbed
-  const fwd = new Request(url.toString(), request)
-  const headers = new Headers(fwd.headers)
-  headers.delete('Sec-WebSocket-Protocol')
-  headers.set('X-Protocol', 'dabble.v1')
-  headers.set('X-User', claims.sub)
-  headers.set('X-User-Name', encodeURIComponent(identity.name.slice(0, MAX_NAME_LENGTH)))
-  headers.set('X-User-Country', identity.country || '')
-  if (ipHash) headers.set('X-IP-Hash', ipHash)
+  const headers = buildJoinHeaders(request.headers, {
+    userId: claims.sub,
+    name: identity.name,
+    country: identity.country,
+    ipHash,
+  })
 
   const hasTokenLike = [...headers.values()].some((v) => /^eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\./.test(v)) ||
     url.searchParams.has('token')
@@ -263,7 +277,7 @@ async function joinRoom(request, env, url) {
 
   try {
     const stub = env.ROOM.get(env.ROOM.idFromName(room))
-    return await stub.fetch(new Request(fwd, { headers }))
+    return await stub.fetch(new Request(url.toString(), { method: 'GET', headers }))
   } catch (e) {
     logEvent('do_fetch_error', { route: 'join', err: errName(e) })
     return roomsBusy('join')

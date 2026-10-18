@@ -315,20 +315,22 @@ import { anonUser, check, CODE_RE, connect, createRoom, probeWs, sleep, summary 
   check('cursor burst over budget closes with 1008', !!closed, closed ? closed.reason : 'no close')
 }
 
-// ---- per-IP socket cap (dev override 8; default-4 unit-tested) --------------------
+// ---- per-IP socket cap (dev override 8; forged X-IP-Hash never honored) --------
 {
   const { body } = await createRoom((await anonUser()).token)
   const sockets = []
+  // Each socket claims a DIFFERENT forged X-IP-Hash: if the Worker let it
+  // through, all 9 would be seen as separate IPs and the 9th would pass.
   for (let i = 0; i < 8; i++) {
     const u = await anonUser()
-    const c = await connect(body.code, u.token)
+    const c = await connect(body.code, u.token, { headers: { 'X-IP-Hash': `forged-${i}` } })
     sockets.push(c)
   }
   check('8 sockets from one IP accepted under the dev override', sockets.every((c) => c.welcome?.seat !== undefined))
   const ninth = await anonUser()
-  const rejected = await probeWs(body.code, ['dabble.v1', ninth.token])
+  const rejected = await probeWs(body.code, ['dabble.v1', ninth.token], { 'X-IP-Hash': 'forged-9' })
   check(
-    '9th socket from one IP -> 429 too_many_connections',
+    '9th socket -> 429 too_many_connections (forged X-IP-Hash ignored)',
     rejected.status === 429 && JSON.parse(rejected.body || '{}')?.error === 'too_many_connections'
   )
   for (const c of sockets) if (c.close) await c.close()

@@ -10,7 +10,9 @@ import path from 'node:path'
 import { generateKeyPair, exportJWK, SignJWT } from 'jose'
 import { verifyAccessToken } from '../src/auth.js'
 import { verifyTurnstile } from '../src/turnstile.js'
-import { ipCapAllows, maxIpSockets } from '../src/config.js'
+import { ipCapAllows, maxIpSockets, MAX_ROOMS_PER_USER_PER_HOUR, maxRoomsPerIpPerHour } from '../src/config.js'
+import { buildJoinHeaders } from '../src/forward.js'
+import { ipHashSaltOk } from '../src/hash.js'
 import { check, summary } from './helpers.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -75,6 +77,53 @@ check('5th socket from one IP rejected at default', ipCapAllows(fourSame, 'a', 4
 check('5th socket allowed when limit is 8', ipCapAllows(fourSame, 'a', 8) === true)
 check('other IPs unaffected', ipCapAllows(fourSame, 'b', 4) === true)
 check('no hash: cap cannot be enforced (allowed)', ipCapAllows(fourSame, null, 4) === true)
+
+// ---- Worker -> DO header allowlist -----------------------------------------
+const hostile = new Headers({
+  Upgrade: 'websocket',
+  Connection: 'Upgrade',
+  'Sec-WebSocket-Key': 'dGVzdGtleQ==',
+  'Sec-WebSocket-Version': '13',
+  'Sec-WebSocket-Extensions': 'permessage-deflate',
+  'Sec-WebSocket-Protocol': 'dabble.v1, eyJhbGciOi.fake.sig',
+  'X-Action': 'create',
+  'X-User': 'attacker',
+  'X-User-Name': 'EVIL',
+  'X-User-Country': 'XX',
+  'X-IP-Hash': 'forged-hash',
+  'X-Protocol': 'evil.v9',
+  Authorization: 'Bearer eyJhbGciOi.fake.sig',
+  Cookie: 'session=1',
+})
+const fwdNoSalt = buildJoinHeaders(hostile, { userId: 'user-1', name: 'Guest', country: null, ipHash: null })
+check('allowlist keeps Upgrade', fwdNoSalt.get('Upgrade') === 'websocket')
+check('allowlist keeps Sec-WebSocket-Key', fwdNoSalt.get('Sec-WebSocket-Key') === 'dGVzdGtleQ==')
+check('client X-Action dropped', fwdNoSalt.get('X-Action') === null)
+check('client X-User replaced with the trusted one', fwdNoSalt.get('X-User') === 'user-1')
+check('client X-User-Name replaced', fwdNoSalt.get('X-User-Name') === 'Guest')
+check('client X-User-Country replaced', fwdNoSalt.get('X-User-Country') === '')
+check('client X-IP-Hash dropped when no salt', fwdNoSalt.get('X-IP-Hash') === null)
+check('client X-Protocol replaced', fwdNoSalt.get('X-Protocol') === 'dabble.v1')
+check('Sec-WebSocket-Protocol never forwarded (JWT carrier)', fwdNoSalt.get('Sec-WebSocket-Protocol') === null)
+check('Authorization never forwarded', fwdNoSalt.get('Authorization') === null)
+check('Cookie never forwarded', fwdNoSalt.get('Cookie') === null)
+const fwdSalted = buildJoinHeaders(hostile, { userId: 'user-1', name: 'Guest', country: 'NZ', ipHash: 'abc123' })
+check('trusted X-IP-Hash forwarded when computed', fwdSalted.get('X-IP-Hash') === 'abc123')
+check('trusted country forwarded', fwdSalted.get('X-User-Country') === 'NZ')
+
+// ---- Production fail-closed without a usable IP hash salt ------------------
+check('prod without salt -> fail closed', ipHashSaltOk({ ENVIRONMENT: 'production' }) === false)
+check('prod short salt (<16) -> fail closed', ipHashSaltOk({ ENVIRONMENT: 'production', IP_HASH_SALT: 'x'.repeat(15) }) === false)
+check('prod 16-char salt -> ok', ipHashSaltOk({ ENVIRONMENT: 'production', IP_HASH_SALT: 'x'.repeat(16) }) === true)
+check('prod long salt -> ok', ipHashSaltOk({ ENVIRONMENT: 'production', IP_HASH_SALT: 'x'.repeat(64) }) === true)
+check('dev without salt -> lenient', ipHashSaltOk({ ENVIRONMENT: 'dev' }) === true)
+check('ENVIRONMENT unset -> lenient', ipHashSaltOk({}) === true)
+
+// ---- Room creation budgets -------------------------------------------------
+check('per-IP creation default is 30', maxRoomsPerIpPerHour({}) === 30)
+check('per-IP creation dev override accepted', maxRoomsPerIpPerHour({ MAX_ROOMS_PER_IP_PER_HOUR: '100' }) === 100)
+check('bogus per-IP creation override falls back to 30', maxRoomsPerIpPerHour({ MAX_ROOMS_PER_IP_PER_HOUR: 'bogus' }) === 30)
+check('per-user creation stays 5', MAX_ROOMS_PER_USER_PER_HOUR === 5)
 
 // ---- Production config hygiene --------------------------------------------
 // The production env must not define test knobs or real values.

@@ -151,4 +151,34 @@ import { anonUser, check, connect, createRoom, probeWs, summary, SUPABASE_URL, T
   check('WS 6-char code -> 400', bad3.status === 400)
 }
 
+// ---- Header injection: client X-* headers never reach the DO ----------------
+{
+  const u = await anonUser()
+
+  // X-Action: create on GET /ws would create rooms with no Turnstile and
+  // no hourly limits; the DO routes create by method+path only.
+  const forged = await probeWs('ZZZZZ', ['dabble.v1', u.token], { 'X-Action': 'create' })
+  check('WS join with forged X-Action: create -> 404', forged.status === 404)
+  const normal = await probeWs('ZZZZZ', ['dabble.v1', u.token])
+  check('forged X-Action created nothing (normal join -> 404)', normal.status === 404)
+
+  // Identity headers are Worker-set on the rebuilt request.
+  const { body } = await createRoom(u.token)
+  const c = await connect(body.code, u.token, {
+    headers: {
+      'X-User': 'attacker',
+      'X-User-Name': 'EVIL',
+      'X-User-Country': 'XX',
+      'X-IP-Hash': 'deadbeef',
+      'X-Protocol': 'evil.v9',
+    },
+  })
+  const me = c.welcome?.players?.find((p) => p.seat === c.welcome?.seat)
+  check('hostile-header join still gets a welcome', !!c.welcome)
+  check('forged X-User ignored (real user in welcome)', me?.userId === u.userId && me?.userId !== 'attacker')
+  check('forged X-User-Name ignored (Guest in welcome)', me?.name === 'Guest' && me?.name !== 'EVIL')
+  check('forged X-User-Country ignored', me?.country !== 'XX')
+  await c.close()
+}
+
 summary('auth')

@@ -19,7 +19,7 @@ ALLOWED_ORIGINS = "http://localhost:5173"
 # is raised here. The production env does NOT define this override.
 IP_ROOM_SOCKET_LIMIT = "8"
 # Same reason: the test suites + load test create many rooms from one IP.
-# Production keeps the config default (10/hour) by not defining it.
+# Production keeps the config default (30/hour) by not defining it.
 MAX_ROOMS_PER_IP_PER_HOUR = "100"
 # Short empty-room grace so tests can watch a room die; production keeps the
 # config default (5 min) by not defining it.

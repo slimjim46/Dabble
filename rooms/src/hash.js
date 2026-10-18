@@ -36,3 +36,12 @@ export async function clientIpHash(request, env) {
   if (!ip) return null
   return hashKey(salt, ip)
 }
+
+/**
+ * Production must have a usable salt or the per-IP caps are silently off;
+ * the routes fail closed instead of serving unprotected. Dev stays lenient.
+ */
+export function ipHashSaltOk(env) {
+  if (env.ENVIRONMENT !== 'production') return true
+  return typeof env.IP_HASH_SALT === 'string' && env.IP_HASH_SALT.length >= 16
+}
