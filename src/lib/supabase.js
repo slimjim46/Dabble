@@ -1,5 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 
+import { ensureCaptchaToken } from './turnstile.js'
+
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL
 const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
 
@@ -31,20 +33,18 @@ export function ensureAnonymousAuth() {
       try {
         const { data: { session } } = await supabase.auth.getSession()
         if (session) return session.user
+        // Turnstile runs before the request, never after it: the token has to
+        // be in hand before signInAnonymously, or the sign-in is rejected.
+        // Without a configured site key none of it runs at all.
         const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY
-        let captchaToken = null
-        if (siteKey && typeof window !== 'undefined') {
-          try {
-            if (window.turnstile && typeof window.turnstile.getResponse === 'function') {
-              captchaToken = window.turnstile.getResponse()
-            }
-            if (!captchaToken && typeof window.turnstile?.execute === 'function') {
-              // some widgets need execute; but better to rely on rendered widget
-            }
-          } catch {}
-        }
-        const opts = captchaToken ? { captchaToken } : undefined
-        const { data, error } = await supabase.auth.signInAnonymously(opts)
+        const captchaToken = siteKey ? await ensureCaptchaToken(siteKey) : null
+        // Key configured but no token: the request would be rejected anyway,
+        // so fail now (the caller shows "not saving") instead of sending a
+        // sign-in that cannot succeed. Bounded waits keep this from hanging.
+        if (siteKey && !captchaToken) return null
+        const { data, error } = await supabase.auth.signInAnonymously(
+          captchaToken ? { options: { captchaToken } } : undefined,
+        )
         if (error) {
           console.error('[dabble] anonymous sign-in failed:', error.message)
           return null

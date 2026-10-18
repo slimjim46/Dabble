@@ -30,24 +30,3 @@
     })
   }
 </script>
-<script src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit" async defer></script>
-<script>
-  (function() {
-    const siteKey = import.meta.env.VITE_TURNSTILE_SITE_KEY
-    if (!siteKey) return
-    function init() {
-      if (window.turnstile && typeof window.turnstile.render === 'function') {
-        try {
-          const el = document.createElement('div')
-          el.style.position = 'fixed'
-          el.style.left = '-9999px'
-          el.style.top = '0'
-          document.body.appendChild(el)
-          window.turnstile.render(el, { sitekey: siteKey, theme: 'light', size: 'invisible' })
-        } catch {}
-      }
-    }
-    if (document.readyState === 'loading') window.addEventListener('DOMContentLoaded', init)
-    else init()
-  })()
-</script>
