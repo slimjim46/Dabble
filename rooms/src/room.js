@@ -13,7 +13,6 @@
 import {
   CLOSE_POLICY,
   CLOSE_TOO_BIG,
-  IP_ROOM_SOCKET_LIMIT,
   KICK_CLOSE,
   MAX_PLAYERS,
   MAX_ROOM_LIFETIME_MS,
@@ -22,27 +21,13 @@ import {
   RATE_BUDGET,
   ROOM_GRACE_MS,
   SEAT_HOLD_MS,
+  ipCapAllows,
+  maxIpSockets,
 } from './config.js'
 import { logEvent } from './log.js'
 import { CLIENT_TYPES, STROKE_TYPES, parseEnvelope } from './wire.js'
 
 const OPEN = 1 // WebSocket.OPEN
-
-// ---- Pure helpers (unit-testable without Workers globals) ----------------
-
-/** Effective per-IP socket cap: env override (dev load test) or default. */
-export function maxIpSockets(env = {}) {
-  const n = Number(env?.IP_ROOM_SOCKET_LIMIT)
-  return Number.isInteger(n) && n >= 1 && n <= 16 ? n : IP_ROOM_SOCKET_LIMIT
-}
-
-/** @param atts attachments of currently connected sockets (plus newIp). */
-export function ipCapAllows(atts, ipHash, limit) {
-  if (!ipHash) return true // no salt configured: cap cannot be enforced
-  let used = 0
-  for (const a of atts) if (a && a.ipHash === ipHash) used++
-  return used < limit
-}
 
 function groupOf(type) {
   if (type === 'cursor') return 'cursor'
@@ -103,6 +88,9 @@ export class Room {
   players(room) {
     const seen = new Map()
     for (const ws of this.state.getWebSockets()) {
+      // A closing socket is still in getWebSockets() during its own
+      // webSocketClose — it must never appear in a part/leave snapshot.
+      if (ws.readyState !== OPEN) continue
       const a = ws.deserializeAttachment?.()
       // seat === null: transient sockets (kick close) that must never list.
       if (!a || a.seat === null || a.seat === undefined || seen.has(a.userId)) continue
@@ -119,6 +107,7 @@ export class Room {
 
   broadcast(obj, except = null) {
     const msg = JSON.stringify(obj)
+    let sent = 0
     for (const ws of this.state.getWebSockets()) {
       if (ws === except) continue
       // Closing/CLOSED sockets throw "Can't call WebSocket send() after
@@ -126,20 +115,13 @@ export class Room {
       // also skip alarm scheduling in handleDisconnect (the spike bug).
       if (ws.readyState !== OPEN) continue
       ws.send(msg)
+      sent++
     }
+    if (obj?.t === 'presence') logEvent('presence_bcast', { event: obj.event, sent, open: this.state.getWebSockets().length })
   }
 
   presence(room, event, userId, seat) {
     this.broadcast({ v: 1, t: 'presence', event, userId, seat, players: this.players(room) })
-  }
-
-  connectedFor(userId) {
-    let n = 0
-    for (const ws of this.state.getWebSockets()) {
-      const a = ws.deserializeAttachment?.()
-      if (a && a.userId === userId) n++
-    }
-    return n
   }
 
   socketsFor(userId) {
@@ -148,6 +130,7 @@ export class Room {
 
   connectedAtts() {
     return this.state.getWebSockets()
+      .filter((ws) => ws.readyState === OPEN)
       .map((ws) => ws.deserializeAttachment?.())
       .filter(Boolean)
   }
@@ -195,6 +178,7 @@ export class Room {
     const room = await this.load()
     if (!room) return
     const now = Date.now()
+    logEvent('alarm_enter', { now, created: room.createdAt })
 
     if (now >= room.createdAt + MAX_ROOM_LIFETIME_MS) {
       for (const ws of this.state.getWebSockets()) {
@@ -553,6 +537,12 @@ export class Room {
 
   async webSocketClose(ws) {
     await this.handleDisconnect(ws)
+    // Complete the close handshake: when the CLIENT initiates the close,
+    // workerd waits for the DO to close the hibernation socket before the
+    // client sees its close event (observed ~14 s stall without this).
+    try {
+      ws.close(1000, 'bye')
+    } catch {}
   }
 
   async webSocketError(ws) {
@@ -562,18 +552,26 @@ export class Room {
   async handleDisconnect(ws) {
     const att = ws.deserializeAttachment?.()
     const room = await this.load()
+    logEvent('disconnect_enter', { hasAtt: !!att, hasRoom: !!room, open: this.state.getWebSockets().length })
     if (!room || !att) return
 
-    const remaining = this.connectedFor(att.userId)
+    let remaining = 0
+    for (const w of this.state.getWebSockets()) {
+      if (w === ws) continue
+      const a = w.deserializeAttachment?.()
+      if (a && a.userId === att.userId) remaining++
+    }
     if (remaining === 0) {
       const seat = room.seats[att.userId]
       if (seat && !seat.heldUntil) {
         // Seat is held for SEAT_HOLD_MS so a reconnect regains it. Guard on
         // heldUntil: webSocketClose and webSocketError can both fire for one
         // socket, and a reconnect clears heldUntil before the old close
-        // handler runs (connectedFor above already excludes it).
+        // handler runs (the remaining count above already excludes the
+        // closing socket).
         seat.heldUntil = Date.now() + this.holdMs()
         await this.save()
+        logEvent('seat_held', { until: seat.heldUntil, hold: this.holdMs() })
         this.presence(room, 'part', att.userId, seat.seat)
       } else if (!seat) {
         // Seat already gone (kicked, or released): presence already covered.

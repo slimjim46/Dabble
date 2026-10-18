@@ -36,7 +36,9 @@ export class Limiter {
 
     const now = Date.now()
     const win = this.windowStart(now)
-    const stored = (await this.state.storage.get(checks.map((c) => c.key))) || {}
+    // storage.get(keys) returns a Map; normalize to a plain object.
+    const fetched = await this.state.storage.get(checks.map((c) => c.key))
+    const stored = fetched instanceof Map ? Object.fromEntries(fetched) : fetched || {}
 
     for (const c of checks) {
       const cur = stored[c.key]

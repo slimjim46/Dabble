@@ -11,7 +11,7 @@
 // client can show a friendly screen.
 import { verifyAccessToken } from './auth.js'
 import { isValidCode, randomCode } from './codes.js'
-import { CREATE_CODE_ATTEMPTS, MAX_NAME_LENGTH, MAX_ROOMS_PER_IP_PER_HOUR, MAX_ROOMS_PER_USER_PER_HOUR } from './config.js'
+import { CREATE_CODE_ATTEMPTS, MAX_NAME_LENGTH, MAX_ROOMS_PER_USER_PER_HOUR, maxRoomsPerIpPerHour } from './config.js'
 import { clientIpHash } from './hash.js'
 import { fetchIdentity } from './identity.js'
 import { Limiter } from './limiter.js'
@@ -89,7 +89,7 @@ async function rateLimitJoin(env, userId, ipHash) {
 
 async function reserveRoomCreation(env, userId, ipHash) {
   const checks = [{ key: `u:${userId}`, limit: MAX_ROOMS_PER_USER_PER_HOUR }]
-  if (ipHash) checks.push({ key: `i:${ipHash}`, limit: MAX_ROOMS_PER_IP_PER_HOUR })
+  if (ipHash) checks.push({ key: `i:${ipHash}`, limit: maxRoomsPerIpPerHour(env) })
   try {
     const stub = env.LIMITER.get(env.LIMITER.idFromName('global'))
     const res = await stub.fetch('https://limiter/', {

@@ -29,7 +29,10 @@ export async function fetchIdentity(userId, jwt, env) {
   if (hit && Date.now() - hit.at < IDENTITY_CACHE_MS) return hit.value
 
   const value = await load(userId, jwt, env)
-  if (value) {
+  // Banned rows are deliberately NOT cached: bans and unbans must take
+  // effect immediately, and banned users are already bounded by the
+  // per-user/per-IP join rate limits (one REST call per rejected attempt).
+  if (value && !value.banned) {
     cache.set(userId, { at: Date.now(), value })
     if (cache.size > 4096) cache.clear() // isolate-local; crude is fine
   }

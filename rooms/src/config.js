@@ -29,6 +29,13 @@ export const KICKED_STATUS = 403 // pre-upgrade: blocked from rejoining
 // ---- Rooms creation limits (Limiter DO, hourly windows) -------------------
 export const MAX_ROOMS_PER_USER_PER_HOUR = 5
 export const MAX_ROOMS_PER_IP_PER_HOUR = 10
+// Dev/load-test override for the per-IP hourly creation budget (same pattern
+// as the socket cap; production env must not define it). The per-user limit
+// has no override: tests and the load test use many fresh users.
+export function maxRoomsPerIpPerHour(env = {}) {
+  const n = Number(env?.MAX_ROOMS_PER_IP_PER_HOUR)
+  return Number.isInteger(n) && n >= 1 && n <= 10000 ? n : MAX_ROOMS_PER_IP_PER_HOUR
+}
 
 // ---- Identity -------------------------------------------------------------
 export const IDENTITY_CACHE_MS = 60000
@@ -61,3 +68,18 @@ export const MAX_FINAL_POINT_NUMBERS = 8000 // strokeCodec MAX_POINT_NUMBERS
 export const MIN_STROKE_WIDTH = 1
 export const MAX_STROKE_WIDTH = 40
 export const MAX_KEY_LENGTH = 64
+
+// ---- Per-IP socket cap (pure helpers, unit-tested in Node) ----------------
+// Effective cap: env override (dev load test) or the default above.
+export function maxIpSockets(env = {}) {
+  const n = Number(env?.IP_ROOM_SOCKET_LIMIT)
+  return Number.isInteger(n) && n >= 1 && n <= 16 ? n : IP_ROOM_SOCKET_LIMIT
+}
+
+/** @param atts attachments of currently connected sockets. */
+export function ipCapAllows(atts, ipHash, limit) {
+  if (!ipHash) return true // no salt configured: cap cannot be enforced
+  let used = 0
+  for (const a of atts) if (a && a.ipHash === ipHash) used++
+  return used < limit
+}
