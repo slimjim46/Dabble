@@ -25,6 +25,7 @@ import { createCanvas, loadImage } from '@napi-rs/canvas'
 
 import { PAPER_SIZE } from '../src/lib/constants.js'
 import { busiestBandTop } from '../src/lib/ogPreview.js'
+import { previewKey, snapshotKey } from '../src/lib/snapshotKey.js'
 import { drawStroke } from '../src/lib/stroke.js'
 import { decodePoints } from '../src/lib/strokeCodec.js'
 
@@ -53,16 +54,6 @@ if (!url || !serviceKey) {
 const supabase = createClient(url, serviceKey, {
   auth: { persistSession: false, autoRefreshToken: false },
 })
-
-/** Object key for a new snapshot: snapshots/<iso-timestamp>.png (bucket-relative). */
-function snapshotKey(date) {
-  return `${date.toISOString().replace(/:/g, '-').replace(/\.\d+Z$/, 'Z')}.png`
-}
-
-/** Object key of the OG preview that accompanies a full PNG snapshot. */
-function previewKey(pngKey) {
-  return pngKey.endsWith('.png') ? `${pngKey.slice(0, -4)}.jpg` : `${pngKey}.jpg`
-}
 
 // Ink is sampled on a square grid: one getImageData over 200x200 cells instead
 // of one over the full 2000x2000 canvas, which is what makes the scan cheap.

@@ -204,20 +204,34 @@ await publicRes.arrayBuffer()
       return this
     },
   }
+  // A newer snapshot from a closed season must never be advertised: a link
+  // preview shows the board people can draw on right now, not a finished one.
+  const closedPath = '2099-01-01T00-00-00Z.png'
+  let closedInsert = 'not attempted'
   try {
     delete process.env.SUPABASE_SERVICE_ROLE_KEY
     process.env.SUPABASE_ANON_KEY = ANON
+    const { error } = await svc.from('snapshots').insert({
+      image_path: closedPath,
+      preview_path: '2099-01-01T00-00-00Z.jpg',
+      kind: 'closed',
+    })
+    closedInsert = error ? error.message : 'ok'
     await snapshotLatest({ method: 'GET' }, res)
   } finally {
     if (savedServiceKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY
     else process.env.SUPABASE_SERVICE_ROLE_KEY = savedServiceKey
     if (savedAnonKey === undefined) delete process.env.SUPABASE_ANON_KEY
     else process.env.SUPABASE_ANON_KEY = savedAnonKey
+    await svc.from('snapshots').delete().eq('image_path', closedPath)
   }
   const location = res.headers.Location ?? ''
-  check('og-redirect', 'the OG endpoint redirects to the preview JPEG without the service role key',
-    res.statusCode === 302 && location.endsWith('.jpg') && location.includes(created?.preview_path ?? ' '),
-    `status=${res.statusCode} location=${location}`)
+  check('og-redirect', 'the OG endpoint redirects to the live preview JPEG, ignoring a newer closed snapshot and the service role key',
+    res.statusCode === 302
+      && location.endsWith('.jpg')
+      && location.includes(created?.preview_path ?? ' ')
+      && !location.includes('2099-'),
+    `closed-row insert=${closedInsert} status=${res.statusCode} location=${location}`)
 }
 
 // ---- 2: incremental draws only the new stroke ----------------------------

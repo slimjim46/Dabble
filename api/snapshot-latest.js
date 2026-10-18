@@ -3,15 +3,17 @@
 // written before previews existed, and a static default when the project has
 // no snapshots at all.
 //
+// Only rows with kind = 'live' are ever advertised: a link preview shows the
+// board people can draw on right now, never a season that has already closed
+// (see the snapshot_kind migration). With no live snapshot left the redirect
+// goes to /og-default.png.
+//
 // Reads with the ANON key. The snapshots table and the bucket are both
 // public-read, so an endpoint that serves a public image has no business
 // holding the service role key. Nothing here logs tokens or IPs.
 import { createClient } from '@supabase/supabase-js'
 
-// Bucket object keys are produced by our render job, but they still cross a
-// trust boundary on the way into a Location header, so only a plain key is
-// accepted — no slashes, no traversal, no control characters.
-const OBJECT_KEY_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
+import { SNAPSHOT_KEY_RE } from '../src/lib/snapshotKey.js'
 
 function redirectTo(res, location) {
   res.status(302)
@@ -41,12 +43,13 @@ export default async function handler(req, res) {
     const { data, error } = await supabase
       .from('snapshots')
       .select('image_path,preview_path')
+      .eq('kind', 'live')
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle()
 
     const object = error ? null : (data?.preview_path || data?.image_path || null)
-    if (object && OBJECT_KEY_RE.test(object)) {
+    if (object && SNAPSHOT_KEY_RE.test(object)) {
       redirectTo(res, `${url}/storage/v1/object/public/snapshots/${object}`)
       return
     }

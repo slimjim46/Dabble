@@ -90,6 +90,11 @@ against the `snapshots` storage bucket:
   `api/snapshot-latest`, which redirects to the JPEG — to the plain PNG for
   rows written before previews existed, and to `public/og-default.png` when the
   project has no snapshots at all.
+- That redirect only ever considers snapshots with `kind = 'live'`, so a link
+  preview shows the board you can draw on right now and never a season that has
+  already closed. Object keys are validated by the same `SNAPSHOT_KEY_RE` on
+  both ends (the renderer in `src/lib/snapshotKey.js` and the endpoint that
+  puts a key into a `Location` header).
 
 Local use (the service-role key is read from the environment only and is never
 printed or committed):
