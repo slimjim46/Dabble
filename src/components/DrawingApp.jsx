@@ -172,9 +172,9 @@ export default function DrawingApp() {
 
   useEffect(() => {
     resizeCanvas()
-    // A shared link (?x=&y=&z=) opens the canvas at that spot; anything missing
-    // or malformed falls back to centering. parseViewParams clamps untrusted
-    // values, so a hostile link cannot push the view off-screen.
+    // A shared link (?cx=&cy=&z=) names the canvas point to open at; anything
+    // missing or malformed falls back to centering. parseViewParams clamps
+    // untrusted values, so a hostile link cannot push the view off-screen.
     const wrap = wrapRef.current
     if (!wrap) return undefined
     const rect = wrap.getBoundingClientRect()
@@ -633,7 +633,14 @@ export default function DrawingApp() {
   )
 
   const shareView = useCallback(async () => {
-    const url = buildShareUrl(window.location.href, viewRef.current)
+    // The link has to name a canvas point, not this window's offsets, so it is
+    // worth the measurement: the person opening it has a different screen.
+    const rect = wrapRef.current?.getBoundingClientRect()
+    if (!rect || !(rect.width > 0) || !(rect.height > 0)) return
+    const url = buildShareUrl(window.location.href, viewRef.current, {
+      width: rect.width,
+      height: rect.height,
+    })
     try {
       if (navigator.share) {
         await navigator.share({ title: 'Dabble', url })
