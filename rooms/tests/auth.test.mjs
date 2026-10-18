@@ -113,7 +113,7 @@ import { anonUser, check, connect, createRoom, probeWs, summary, SUPABASE_URL, T
   check('WS query-token without protocol header -> 400 (no query path)', queryOnly.status === 400)
 
   const c = await connect(code, token)
-  check('WS header token connects with protocol echo', c.status === undefined && c.protocol === 'dabble.v1')
+  check('WS header token connects with protocol echo', c.status === 101 && c.protocol === 'dabble.v1')
   if (c.ws) await c.close()
 }
 
