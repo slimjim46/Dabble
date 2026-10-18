@@ -83,11 +83,13 @@ against the `snapshots` storage bucket:
   kept; older rows and objects are deleted by exact id.
 - `snapshots.last_stroke_created_at` records the newest baked stroke, which is
   what makes the next incremental run possible.
-- Every snapshot also gets a 1200x630 JPEG (`snapshots.preview_path`), letterboxed
-  from the full PNG. Link previews need that exact shape and a size scrapers will
-  actually fetch, so `og:image` points at `api/snapshot-latest`, which redirects
-  to the JPEG — to the plain PNG for rows written before previews existed, and to
-  `public/og-default.png` when the project has no snapshots at all.
+- Every snapshot also gets a 1200x630 JPEG (`snapshots.preview_path`), cut from
+  the busiest full-width band of the board so the frame is full of drawing
+  rather than a letterboxed square between white bars. Link previews need that
+  exact shape and a size scrapers will actually fetch, so `og:image` points at
+  `api/snapshot-latest`, which redirects to the JPEG — to the plain PNG for
+  rows written before previews existed, and to `public/og-default.png` when the
+  project has no snapshots at all.
 
 Local use (the service-role key is read from the environment only and is never
 printed or committed):

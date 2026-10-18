@@ -105,6 +105,20 @@ async function pixel(path, x, y) {
   return { r, g, b, a }
 }
 
+/** Non-white pixels in the first `xLimit` columns of an image buffer. */
+async function inkInColumns(buf, xLimit) {
+  const img = await loadImage(buf)
+  const canvas = createCanvas(img.width, img.height)
+  const ctx = canvas.getContext('2d')
+  ctx.drawImage(img, 0, 0)
+  const { data } = ctx.getImageData(0, 0, Math.min(xLimit, img.width), img.height)
+  let ink = 0
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i] < 250 || data[i + 1] < 250 || data[i + 2] < 250) ink++
+  }
+  return ink
+}
+
 const isRed = (p) => p.r > 200 && p.g < 80 && p.b < 80
 const isBlue = (p) => p.b > 200 && p.r < 80 && p.g < 80
 const isWhite = (p) => p.r > 250 && p.g > 250 && p.b > 250
@@ -156,6 +170,13 @@ await publicRes.arrayBuffer()
   check('preview-size', 'the preview is 1200x630, the shape scrapers ask for',
     previewImg && previewImg.width === 1200 && previewImg.height === 630,
     previewImg ? `${previewImg.width}x${previewImg.height}` : 'unreadable')
+
+  // The seeded stroke starts at canvas x=100, which a full-width crop puts
+  // near the left edge of the frame — inside the white bar a letterboxed
+  // preview would leave there.
+  const leftInk = previewBuf ? await inkInColumns(previewBuf, 250) : 0
+  check('preview-crop', 'the preview is cropped to the drawing, not letterboxed with white bars',
+    leftInk > 0, `non-white pixels left of x=250: ${leftInk}`)
 }
 
 // The endpoint must reach the snapshot with the PUBLIC key: run it while the

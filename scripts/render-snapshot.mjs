@@ -3,7 +3,8 @@
 //   node scripts/render-snapshot.mjs [--full] [--dry-run]
 //
 // Every snapshot lands as a 2000x2000 PNG (what clients draw) plus a 1200x630
-// JPEG preview (what /api/snapshot-latest redirects scrapers to).
+// JPEG preview cropped to the busiest band (what /api/snapshot-latest
+// redirects scrapers to).
 //
 // Reads SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY from the environment only.
 // The key is used to create one client; it is never written to disk, never put
@@ -23,6 +24,7 @@ import { createClient } from '@supabase/supabase-js'
 import { createCanvas, loadImage } from '@napi-rs/canvas'
 
 import { PAPER_SIZE } from '../src/lib/constants.js'
+import { busiestBandTop } from '../src/lib/ogPreview.js'
 import { drawStroke } from '../src/lib/stroke.js'
 import { decodePoints } from '../src/lib/strokeCodec.js'
 
@@ -62,19 +64,47 @@ function previewKey(pngKey) {
   return pngKey.endsWith('.png') ? `${pngKey.slice(0, -4)}.jpg` : `${pngKey}.jpg`
 }
 
+// Ink is sampled on a square grid: one getImageData over 200x200 cells instead
+// of one over the full 2000x2000 canvas, which is what makes the scan cheap.
+const PREVIEW_SAMPLE = 200
+
+/** Ink per sampled row of the rendered paper (index 0 is the top row). */
+function inkProfile(source) {
+  const sample = createCanvas(PREVIEW_SAMPLE, PREVIEW_SAMPLE)
+  const ctx = sample.getContext('2d')
+  ctx.drawImage(source, 0, 0, PREVIEW_SAMPLE, PREVIEW_SAMPLE)
+  const { data } = ctx.getImageData(0, 0, PREVIEW_SAMPLE, PREVIEW_SAMPLE)
+  const rowInk = new Array(PREVIEW_SAMPLE).fill(0)
+  for (let i = 0; i < PREVIEW_SAMPLE * PREVIEW_SAMPLE; i++) {
+    const p = i * 4
+    // The paper is pure white, so anything off it is a stroke (antialiasing
+    // and all). A cell with a single drawn pixel in it counts as ink.
+    if (data[p] < 250 || data[p + 1] < 250 || data[p + 2] < 250) rowInk[(i / PREVIEW_SAMPLE) | 0]++
+  }
+  return rowInk
+}
+
 /**
- * The same canvas at 1200x630, letterboxed on white: the whole square paper
- * stays visible instead of being cropped to the middle band.
+ * The 1200x630 OG preview: a full-width band of the square paper, as tall as
+ * the preview's aspect allows, sitting over the busiest part of the board (the
+ * middle band when nothing is drawn). Cropping instead of letterboxing fills
+ * the frame with the drawing — a letterboxed square on white bars reads as a
+ * broken image in a link preview.
  */
 function renderPreview(source) {
+  const bandHeight = Math.round(PAPER_SIZE * (PREVIEW_HEIGHT / PREVIEW_WIDTH))
+  const bandRows = Math.round(PREVIEW_SAMPLE * (PREVIEW_HEIGHT / PREVIEW_WIDTH))
+  const rowUnit = PAPER_SIZE / PREVIEW_SAMPLE
+  const top = Math.min(
+    PAPER_SIZE - bandHeight,
+    busiestBandTop(inkProfile(source), bandRows) * rowUnit,
+  )
+
   const canvas = createCanvas(PREVIEW_WIDTH, PREVIEW_HEIGHT)
   const ctx = canvas.getContext('2d')
   ctx.fillStyle = '#ffffff'
   ctx.fillRect(0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT)
-  const scale = Math.min(PREVIEW_WIDTH / PAPER_SIZE, PREVIEW_HEIGHT / PAPER_SIZE)
-  const width = PAPER_SIZE * scale
-  const height = PAPER_SIZE * scale
-  ctx.drawImage(source, (PREVIEW_WIDTH - width) / 2, (PREVIEW_HEIGHT - height) / 2, width, height)
+  ctx.drawImage(source, 0, top, PAPER_SIZE, bandHeight, 0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT)
   return canvas.toBuffer('image/jpeg', JPEG_QUALITY)
 }
 
