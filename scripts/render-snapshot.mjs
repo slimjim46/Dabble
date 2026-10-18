@@ -2,6 +2,9 @@
 //
 //   node scripts/render-snapshot.mjs [--full] [--dry-run]
 //
+// Every snapshot lands as a 2000x2000 PNG (what clients draw) plus a 1200x630
+// JPEG preview (what /api/snapshot-latest redirects scrapers to).
+//
 // Reads SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY from the environment only.
 // The key is used to create one client; it is never written to disk, never put
 // in a URL, and never printed (not even on error).
@@ -28,6 +31,11 @@ const KEEP_SNAPSHOTS = 24
 const SNAPSHOT_SETTLE_MS = 10 * 60 * 1000
 const FULL_MAX_AGE_MS = 24 * 60 * 60 * 1000
 const BUCKET = 'snapshots'
+// Open Graph wants a landscape image; every scraper we care about asks for
+// roughly this box. The full PNG stays the source of truth for clients.
+const PREVIEW_WIDTH = 1200
+const PREVIEW_HEIGHT = 630
+const JPEG_QUALITY = 0.82
 
 const args = new Set(process.argv.slice(2))
 const forcedFull = args.has('--full')
@@ -47,6 +55,27 @@ const supabase = createClient(url, serviceKey, {
 /** Object key for a new snapshot: snapshots/<iso-timestamp>.png (bucket-relative). */
 function snapshotKey(date) {
   return `${date.toISOString().replace(/:/g, '-').replace(/\.\d+Z$/, 'Z')}.png`
+}
+
+/** Object key of the OG preview that accompanies a full PNG snapshot. */
+function previewKey(pngKey) {
+  return pngKey.endsWith('.png') ? `${pngKey.slice(0, -4)}.jpg` : `${pngKey}.jpg`
+}
+
+/**
+ * The same canvas at 1200x630, letterboxed on white: the whole square paper
+ * stays visible instead of being cropped to the middle band.
+ */
+function renderPreview(source) {
+  const canvas = createCanvas(PREVIEW_WIDTH, PREVIEW_HEIGHT)
+  const ctx = canvas.getContext('2d')
+  ctx.fillStyle = '#ffffff'
+  ctx.fillRect(0, 0, PREVIEW_WIDTH, PREVIEW_HEIGHT)
+  const scale = Math.min(PREVIEW_WIDTH / PAPER_SIZE, PREVIEW_HEIGHT / PAPER_SIZE)
+  const width = PAPER_SIZE * scale
+  const height = PAPER_SIZE * scale
+  ctx.drawImage(source, (PREVIEW_WIDTH - width) / 2, (PREVIEW_HEIGHT - height) / 2, width, height)
+  return canvas.toBuffer('image/jpeg', JPEG_QUALITY)
 }
 
 /** Page a query 1000 rows at a time, ordered (created_at, id). */
@@ -94,13 +123,15 @@ async function hasStaleBake(prev) {
 async function prune() {
   const { data, error } = await supabase
     .from('snapshots')
-    .select('id,image_path')
+    .select('id,image_path,preview_path')
     .order('created_at', { ascending: false })
   if (error) throw new Error(`list snapshots: ${error.message}`)
   const stale = data.slice(KEEP_SNAPSHOTS)
   for (const row of stale) {
-    const { error: objectError } = await supabase.storage.from(BUCKET).remove([row.image_path])
-    if (objectError) throw new Error(`remove object ${row.image_path}: ${objectError.message}`)
+    const objects = [row.image_path]
+    if (row.preview_path) objects.push(row.preview_path)
+    const { error: objectError } = await supabase.storage.from(BUCKET).remove(objects)
+    if (objectError) throw new Error(`remove object ${objects.join(', ')}: ${objectError.message}`)
     const { error: rowError } = await supabase.from('snapshots').delete().eq('id', row.id)
     if (rowError) throw new Error(`delete snapshot row: ${rowError.message}`)
   }
@@ -159,10 +190,11 @@ async function main() {
   }
 
   const png = canvas.toBuffer('image/png')
+  const preview = renderPreview(canvas)
 
   if (dryRun) {
     console.log(
-      `strokes drawn: ${strokes.length} | mode: ${full ? 'full' : 'incremental'} | png: ${png.length} bytes | ${Date.now() - started} ms | dry-run, not uploaded`,
+      `strokes drawn: ${strokes.length} | mode: ${full ? 'full' : 'incremental'} | png: ${png.length} bytes | jpg: ${preview.length} bytes | ${Date.now() - started} ms | dry-run, not uploaded`,
     )
     return
   }
@@ -175,15 +207,30 @@ async function main() {
   })
   if (uploadError) throw new Error(`upload ${key}: ${uploadError.message}`)
 
+  // The preview is recorded only if it actually landed: a NULL preview_path
+  // makes /api/snapshot-latest fall back to the PNG instead of 404-ing.
+  const previewObject = previewKey(key)
+  let previewPath = null
+  const { error: previewError } = await supabase.storage.from(BUCKET).upload(previewObject, preview, {
+    contentType: 'image/jpeg',
+    cacheControl: '31536000',
+    upsert: false,
+  })
+  if (previewError) {
+    console.warn(`preview upload failed (${previewError.message}) — OG image falls back to the PNG`)
+  } else {
+    previewPath = previewObject
+  }
+
   const { error: insertError } = await supabase
     .from('snapshots')
-    .insert({ image_path: key, last_stroke_created_at: lastBaked })
+    .insert({ image_path: key, preview_path: previewPath, last_stroke_created_at: lastBaked })
   if (insertError) throw new Error(`insert snapshot row: ${insertError.message}`)
 
   const pruned = await prune()
 
   console.log(
-    `strokes drawn: ${strokes.length} | mode: ${full ? 'full' : 'incremental'} (${reason}) | png: ${png.length} bytes | ${Date.now() - started} ms | kept newest ${KEEP_SNAPSHOTS}, pruned ${pruned}`,
+    `strokes drawn: ${strokes.length} | mode: ${full ? 'full' : 'incremental'} (${reason}) | png: ${png.length} bytes | jpg: ${preview.length} bytes${previewPath ? '' : ' (preview not stored)'} | ${Date.now() - started} ms | kept newest ${KEEP_SNAPSHOTS}, pruned ${pruned}`,
   )
 }
 

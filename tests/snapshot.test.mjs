@@ -84,7 +84,7 @@ async function backdate(ids, msAgo) {
 async function snapshotRows() {
   const { data, error } = await svc
     .from('snapshots')
-    .select('id,image_path,created_at,last_stroke_created_at')
+    .select('id,image_path,preview_path,created_at,last_stroke_created_at')
     .order('created_at', { ascending: false })
   if (error) throw new Error(`list snapshots failed: ${error.message}`)
   return data
@@ -144,6 +144,60 @@ const publicRes = await fetch(publicUrl)
 check('public-read', 'the snapshot is publicly readable without a key',
   publicRes.status === 200, `status=${publicRes.status}`)
 await publicRes.arrayBuffer()
+
+// ---- 1b: the 1200x630 OG preview, and the endpoint that serves it ---------
+{
+  const previewBuf = created?.preview_path ? await download(created.preview_path) : null
+  check('preview-object', 'the row points at a real JPEG object in the bucket',
+    created?.preview_path?.endsWith('.jpg') && previewBuf?.[0] === 0xff && previewBuf?.[1] === 0xd8,
+    `preview_path=${created?.preview_path} bytes=${previewBuf?.length}`)
+
+  const previewImg = previewBuf ? await loadImage(previewBuf) : null
+  check('preview-size', 'the preview is 1200x630, the shape scrapers ask for',
+    previewImg && previewImg.width === 1200 && previewImg.height === 630,
+    previewImg ? `${previewImg.width}x${previewImg.height}` : 'unreadable')
+}
+
+// The endpoint must reach the snapshot with the PUBLIC key: run it while the
+// service role key is unset, so a handler that ever reaches for it fails here.
+{
+  const { default: snapshotLatest } = await import('../api/snapshot-latest.js')
+  const savedServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+  const savedAnonKey = process.env.SUPABASE_ANON_KEY
+  const res = {
+    statusCode: 0,
+    headers: {},
+    status(code) {
+      this.statusCode = code
+      return this
+    },
+    setHeader(name, value) {
+      this.headers[name] = value
+      return this
+    },
+    json(payload) {
+      this.body = payload
+      return this
+    },
+    end() {
+      return this
+    },
+  }
+  try {
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY
+    process.env.SUPABASE_ANON_KEY = ANON
+    await snapshotLatest({ method: 'GET' }, res)
+  } finally {
+    if (savedServiceKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = savedServiceKey
+    if (savedAnonKey === undefined) delete process.env.SUPABASE_ANON_KEY
+    else process.env.SUPABASE_ANON_KEY = savedAnonKey
+  }
+  const location = res.headers.Location ?? ''
+  check('og-redirect', 'the OG endpoint redirects to the preview JPEG without the service role key',
+    res.statusCode === 302 && location.endsWith('.jpg') && location.includes(created?.preview_path ?? ' '),
+    `status=${res.statusCode} location=${location}`)
+}
 
 // ---- 2: incremental draws only the new stroke ----------------------------
 const newStroke = {
@@ -241,7 +295,8 @@ check('no-client-writes', 'clients cannot insert snapshot rows or upload, and th
 {
   const now = await snapshotRows()
   for (const row of now.filter((r) => !before.has(r.id))) {
-    await svc.storage.from(BUCKET).remove([row.image_path])
+    const objects = row.preview_path ? [row.image_path, row.preview_path] : [row.image_path]
+    await svc.storage.from(BUCKET).remove(objects)
     await svc.from('snapshots').delete().eq('id', row.id)
   }
   await svc.from('strokes').delete().in('id', strokeIds)

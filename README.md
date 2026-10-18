@@ -19,6 +19,15 @@ Then open the URL printed in the terminal (usually http://localhost:5173).
 Vercel Functions, so use `vercel dev` (with the Supabase env vars set) to
 exercise sessions and heartbeats locally.
 
+Two environment variables are only read at deploy time:
+
+- `VITE_SITE_URL` — the absolute site origin (e.g. `https://dabble.example`).
+  Open Graph tags have to be absolute or every scraper drops them, so when this
+  is missing the `og:image` / `twitter:image` tags are removed from the build
+  rather than published pointing nowhere.
+- `SUPABASE_ANON_KEY` — read by `api/snapshot-latest.js`. That endpoint serves
+  a public image, so it deliberately never touches the service-role key.
+
 Clients cannot delete strokes, so test runs would fill the dev canvas with
 scribbles. The end-to-end suites therefore call the dev-only helper
 `dev_only_hide_all_strokes()` (see `supabase/dev/`) when they finish, which
@@ -61,6 +70,11 @@ against the `snapshots` storage bucket:
   kept; older rows and objects are deleted by exact id.
 - `snapshots.last_stroke_created_at` records the newest baked stroke, which is
   what makes the next incremental run possible.
+- Every snapshot also gets a 1200x630 JPEG (`snapshots.preview_path`), letterboxed
+  from the full PNG. Link previews need that exact shape and a size scrapers will
+  actually fetch, so `og:image` points at `api/snapshot-latest`, which redirects
+  to the JPEG — to the plain PNG for rows written before previews existed, and to
+  `public/og-default.png` when the project has no snapshots at all.
 
 Local use (the service-role key is read from the environment only and is never
 printed or committed):
