@@ -90,6 +90,39 @@ internet can use it, so assume some visitors are hostile.
 - Keep SQL limits and `src/lib/constants.js` in sync. When you change one,
   change the other and say so.
 
+## The rooms/ Worker (Dabble v2)
+
+`rooms/` is the real-time room server: a Cloudflare Worker + Durable Objects
+project, plain JS ESM, independent of the Vercel app. It lives on branch
+`v2-rooms-server` and deploys to the **dev** worker `dabble-rooms-dev` only.
+
+- Work only inside `rooms/` (plus this section). `src/`, `api/`,
+  `supabase/migrations`, `vercel.json` and the root `package.json` are not
+  touched by rooms work.
+- Wrangler v4 lives in `rooms/package.json` only. `wrangler.toml` defines an
+  `[env.production]` with placeholder URLs/origins: never put real production
+  values in it, and never `wrangler deploy --env production` without the
+  owner naming the migration/deploy in the task.
+- Secrets (`IP_HASH_SALT`, optional `TURNSTILE_SECRET`) go in Wrangler secret
+  settings for the dev worker, never in a file, log, or message. The Supabase
+  anon key is injected at deploy time from the shell, not committed.
+- Auth is `Sec-WebSocket-Protocol: dabble.v1, <jwt>` only. The Worker verifies
+  the JWT, strips the header, and the Durable Object never sees a token.
+- Identity/name/country/ban come only from the `players` row fetched with the
+  user's own JWT (fail open as "Guest" on Supabase errors, counted). Client
+  messages never carry trusted identity.
+- Room codes: 5 chars, alphabet without look-alikes. Code format is validated
+  in the Worker before any Durable Object is touched; join attempts pass the
+  Workers rate limiting bindings first.
+- All limits live in `rooms/src/config.js`; the Worker and the DO both import
+  it. Exceeding a message budget closes the socket (billed on arrival, so
+  dropping saves nothing).
+- Logging is event names and counts only: no tokens, IPs, names, room words,
+  or free-form user data.
+- Tests are Node scripts in `rooms/tests/`, run against the **dev** worker
+  (dev Supabase project). Dev-only SQL helpers go in `supabase/dev/` and are
+  shown to the owner before being applied to dev; never to production.
+
 ## Definition of done for a task
 
 1. Migration(s) applied to dev and listed with their file names.

@@ -1,0 +1,21 @@
+{
+  "name": "dabble-rooms",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Dabble v2 game room server: Cloudflare Worker + Durable Objects",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "deploy:prod": "wrangler deploy --env production",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail",
+    "test": "node tests/run.mjs"
+  },
+  "dependencies": {
+    "jose": "^5.9.6"
+  },
+  "devDependencies": {
+    "ws": "^8.22.0",
+    "wrangler": "^4.151.1"
+  }
+}

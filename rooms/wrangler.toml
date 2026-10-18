@@ -1,0 +1,86 @@
+# Dabble v2 room server. Real server; not the live app's frontend.
+# Dev deploys as dabble-rooms-dev. The production environment below is a
+# definition only: never deploy it without the owner's explicit say-so, and
+# never put real production origins/secrets in this file (placeholders only).
+# SUPABASE_ANON_KEY is intentionally empty here: it is injected at deploy
+# time from the shell environment (--var), never committed.
+
+name = "dabble-rooms-dev"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+[vars]
+ENVIRONMENT = "dev"
+# Dev Supabase project (Dabble-Dev). Not a secret; the anon key is public.
+SUPABASE_URL = "https://mlynwcajwxmceglgtcat.supabase.co"
+# Comma-separated origins allowed to open sockets / call POST /rooms.
+ALLOWED_ORIGINS = "http://localhost:5173"
+# Dev runs the load test from one machine, so the per-IP-per-room socket cap
+# is raised here. The production env does NOT define this override.
+IP_ROOM_SOCKET_LIMIT = "8"
+# Short empty-room grace so tests can watch a room die; production keeps the
+# config default (5 min) by not defining it.
+ROOM_GRACE_MS = "15000"
+# Test double for the daily-quota failure path. Honored only when
+# ENVIRONMENT === "dev"; the production env must never define it.
+# SIMULATE_QUOTA = "1"
+
+# Join probe shield (60 s windows): nobody should be able to burn the daily
+# DO quota by hammering random codes. Docs: period must be 10 or 60 seconds.
+[[ratelimits]]
+name = "JOIN_USER"
+namespace_id = "2101"
+  [ratelimits.simple]
+  limit = 60
+  period = 60
+
+[[ratelimits]]
+name = "JOIN_IP"
+namespace_id = "2102"
+  [ratelimits.simple]
+  limit = 90
+  period = 60
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[durable_objects.bindings]]
+name = "LIMITER"
+class_name = "Limiter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room", "Limiter"]
+
+# Production: defined, never deployed from this phase. Placeholders only.
+# Inherits nothing from the top level: bindings/vars/migrations are repeated.
+[env.production]
+name = "dabble-rooms"
+vars = { ENVIRONMENT = "production", SUPABASE_URL = "https://PRODUCTION_SUPABASE_URL.supabase.co", ALLOWED_ORIGINS = "https://PRODUCTION_APP_ORIGIN.example" }
+
+[[env.production.ratelimits]]
+name = "JOIN_USER"
+namespace_id = "2201"
+  [env.production.ratelimits.simple]
+  limit = 60
+  period = 60
+
+[[env.production.ratelimits]]
+name = "JOIN_IP"
+namespace_id = "2202"
+  [env.production.ratelimits.simple]
+  limit = 90
+  period = 60
+
+[[env.production.durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[env.production.durable_objects.bindings]]
+name = "LIMITER"
+class_name = "Limiter"
+
+[[env.production.migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room", "Limiter"]
