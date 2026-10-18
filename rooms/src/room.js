@@ -79,6 +79,13 @@ export class Room {
     return Number.isFinite(n) && n >= 0 ? n : ROOM_GRACE_MS
   }
 
+  holdMs() {
+    // Dev tests shorten this via env (like ROOM_GRACE_MS); production
+    // env must not define SEAT_HOLD_MS and gets the config default.
+    const n = Number(this.env.SEAT_HOLD_MS)
+    return Number.isFinite(n) && n >= 0 ? n : SEAT_HOLD_MS
+  }
+
   async load() {
     if (this.room === null) {
       this.room = (await this.state.storage.get('room')) || null
@@ -565,7 +572,7 @@ export class Room {
         // heldUntil: webSocketClose and webSocketError can both fire for one
         // socket, and a reconnect clears heldUntil before the old close
         // handler runs (connectedFor above already excludes it).
-        seat.heldUntil = Date.now() + SEAT_HOLD_MS
+        seat.heldUntil = Date.now() + this.holdMs()
         await this.save()
         this.presence(room, 'part', att.userId, seat.seat)
       } else if (!seat) {

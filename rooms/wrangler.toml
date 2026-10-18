@@ -21,6 +21,9 @@ IP_ROOM_SOCKET_LIMIT = "8"
 # Short empty-room grace so tests can watch a room die; production keeps the
 # config default (5 min) by not defining it.
 ROOM_GRACE_MS = "15000"
+# Short seat hold so tests can watch promotion/release; production keeps the
+# config default (2 min) by not defining it.
+SEAT_HOLD_MS = "5000"
 # Test double for the daily-quota failure path. Honored only when
 # ENVIRONMENT === "dev"; the production env must never define it.
 # SIMULATE_QUOTA = "1"
