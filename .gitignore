@@ -8,6 +8,7 @@ dist/
 # Environment variables and secrets
 .env
 .env.*
+!.env.example
 blocked-terms.txt
 
 # Windows/NTFS alternate-data-stream droppings and tool output
