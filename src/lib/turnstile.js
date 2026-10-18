@@ -95,6 +95,9 @@ export function waitForToken(
     try {
       widgetId = turnstile.render(container, {
         sitekey: siteKey,
+        // The dashboard widget is created Invisible (README); say so here too,
+        // so a challenge can never be asked for in a container nobody can see.
+        size: 'invisible',
         callback: finish,
         'error-callback': () => finish(null),
         'expired-callback': () => finish(null),

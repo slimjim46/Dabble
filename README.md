@@ -23,7 +23,7 @@ Then open the URL printed in the terminal (usually http://localhost:5173).
 Vercel Functions, so use `vercel dev` (with the Supabase env vars set) to
 exercise sessions and heartbeats locally.
 
-Two environment variables are only read at deploy time:
+Environment variables are read at deploy time (`.env.example` lists them all):
 
 - `VITE_SITE_URL` — the absolute site origin (e.g. `https://dabble.example`).
   Open Graph tags have to be absolute or every scraper drops them, so when this
@@ -31,6 +31,11 @@ Two environment variables are only read at deploy time:
   rather than published pointing nowhere.
 - `SUPABASE_ANON_KEY` — read by `api/snapshot-latest.js`. That endpoint serves
   a public image, so it deliberately never touches the service-role key.
+- `VITE_TURNSTILE_SITE_KEY` — optional; turns on the bot check described under
+  Privacy. Create the widget as **Invisible** in the Cloudflare dashboard.
+  Dabble renders it into an off-screen container with no room for a challenge
+  to appear and nothing for anyone to click, so a widget created as visible or
+  interactive would have nowhere to show itself and nobody to solve it.
 
 Clients cannot delete strokes, so test runs would fill the dev canvas with
 scribbles. The end-to-end suites therefore call the dev-only helper
@@ -52,6 +57,10 @@ We never store or log your IP address, and we never ask for an email, a
 password, or an account. Country codes come from the platform's geo header and
 are the only location data we keep. Sessions older than 90 days are deleted;
 strokes that enough people report are hidden from the canvas.
+
+When `VITE_TURNSTILE_SITE_KEY` is set, your browser contacts
+`challenges.cloudflare.com` for Cloudflare's bot check before we create the
+anonymous account; all Dabble ever sees is the token that check hands back.
 
 ## Canvas snapshots
 

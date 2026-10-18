@@ -91,6 +91,8 @@ function fakeDom() {
   const token = await waitForToken(turnstile, {}, { siteKey: 'sitekey', timeoutMs: 500 })
   check('resolves the token the widget reports', token === 'token-abc', String(token))
   check('renders with the site key', captured && captured.sitekey === 'sitekey', JSON.stringify(captured))
+  check('renders invisibly (widget is created Invisible in the dashboard)',
+    captured && captured.size === 'invisible', `size=${captured?.size}`)
   check('passes a callback for the token', captured && typeof captured.callback === 'function')
   check('passes an error callback', captured && typeof captured['error-callback'] === 'function')
   check('passes an expiry callback', captured && typeof captured['expired-callback'] === 'function')
