@@ -6,7 +6,9 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "node tests/country.test.mjs && node tests/overlay.test.mjs && node tests/viewUrl.test.mjs && node tests/turnstile.test.mjs && node tests/paperCache.test.mjs && node tests/undoRule.test.mjs && node tests/hitTest.test.mjs && node tests/strokeSplit.test.mjs && node tests/api.test.mjs",
+    "test:dev": "node tests/rls.test.mjs && node tests/snapshot.test.mjs && node tests/phase3-acceptance.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.109.0",

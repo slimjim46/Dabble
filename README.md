@@ -130,11 +130,13 @@ now, and snapshot reads already keep the hot path small.
 
 ## Scripts
 
-| Command           | Description                    |
-| ----------------- | ------------------------------ |
-| `npm run dev`     | Start dev server with HMR      |
-| `npm run build`   | Build for production           |
-| `npm run preview` | Preview the production build   |
+| Command            | Description                                             |
+| ------------------ | ------------------------------------------------------- |
+| `npm run dev`      | Start dev server with HMR                               |
+| `npm run build`    | Build for production                                    |
+| `npm run preview`  | Preview the production build                            |
+| `npm test`         | Unit suites that need no network and no Supabase env    |
+| `npm run test:dev` | RLS / snapshot / phase-3 acceptance suites, run against **dev** |
 
 ## Project structure
 
