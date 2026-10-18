@@ -111,6 +111,22 @@ project, plain JS ESM, independent of the Vercel app. It lives on branch
 - Identity/name/country/ban come only from the `players` row fetched with the
   user's own JWT (fail open as "Guest" on Supabase errors, counted). Client
   messages never carry trusted identity.
+- Worker -> DO requests are rebuilt from an allowlist in `rooms/src/forward.js`
+  (handshake headers only + Worker-set `X-*`). Never forward the client's
+  headers through: a client `X-Action` or `X-IP-Hash` would bypass creation
+  limits and the per-IP caps. The DO recognises create only by internal
+  method + path (`POST /create`), never by a header.
+- Known gaps (accepted for now):
+  1. Kick blocks are per account: another account (or device) can rejoin;
+     the per-IP socket cap is the only cross-account limit.
+  2. Unauthenticated request floods still spend Worker quota (route-level
+     work happens before auth). Mitigating this needs a custom domain plus
+     Cloudflare zone-level rate limiting later.
+  3. The free plan daily quota is account-wide: dev load tests consume the
+     same allowance as production.
+  4. A player banned after connecting keeps their seat until they
+     reconnect; bans are checked only at connect time (see
+     `rooms/src/identity.js`).
 - Room codes: 5 chars, alphabet without look-alikes. Code format is validated
   in the Worker before any Durable Object is touched; join attempts pass the
   Workers rate limiting bindings first.
