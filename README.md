@@ -4,7 +4,11 @@ A React app built with [Vite](https://vitejs.dev).
 
 ## Requirements
 
-- Node.js 18+
+- Node.js 22 or newer. `package.json` declares `engines.node >= 22`, which is
+  also what Vercel uses to pick the runtime for `api/`. `@supabase/supabase-js`
+  needs the native WebSocket global and refuses to start on Node 20, so the dev
+  suites, the load test and the snapshot job all fail there; the offline
+  `npm test` suites still run on older Node.
 
 ## Getting started
 
