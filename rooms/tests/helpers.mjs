@@ -119,6 +119,7 @@ export async function connect(room, token, { headers = {}, waitForWelcome = true
   const r = await probeWs(room, ['dabble.v1', token], headers)
   if (r.status !== 101) return r
   const c = {
+    status: 101,
     ws: r.ws,
     protocol: r.ws.protocol,
     messages: [],
