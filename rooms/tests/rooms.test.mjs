@@ -392,4 +392,89 @@ import { anonUser, check, CODE_RE, connect, createRoom, probeWs, sleep, summary 
   await w.close()
 }
 
+// ---- non-host kick is rejected ---------------------------------------------
+{
+  const host = await anonUser()
+  const mate = await anonUser()
+  const target = await anonUser()
+  const { body } = await createRoom(host.token)
+  const a = await connect(body.code, host.token)
+  const b = await connect(body.code, mate.token)
+  const c = await connect(body.code, target.token)
+
+  // A single non-host kick is a violation, never a kick: no ack, target stays.
+  b.ws.send(JSON.stringify({ v: 1, t: 'kick', userId: target.userId }))
+  await sleep(500)
+  check('non-host kick yields no kick_ack', !b.json().some((m) => m.t === 'kick_ack'))
+  check('target stays seated after a non-host kick', !c.closed && !c.closes.some((x) => x.code === 4003))
+
+  // Sustained non-host kicks hit the violation budget and close 1008 (spaced
+  // to stay inside the per-type rate budget, so the close is the violation path).
+  for (let i = 0; i < 20; i++) {
+    b.ws.send(JSON.stringify({ v: 1, t: 'kick', userId: target.userId }))
+    await sleep(250)
+  }
+  const closed = await b.waitForClose(1008)
+  check('sustained non-host kicks close with 1008', !!closed, closed ? closed.reason : 'no close')
+  check('target was never actually kicked', !c.closed && !c.closes.some((x) => x.code === 4003))
+  await a.close()
+  await c.close()
+}
+
+// ---- empty-room grace: alarm cleanup after everyone leaves ------------------
+{
+  const host = await anonUser()
+  const { body } = await createRoom(host.token)
+  const a = await connect(body.code, host.token)
+  const b = await connect(body.code, (await anonUser()).token)
+  check('grace: two players seated', a.welcome?.seat === 0 && b.welcome?.seat === 1)
+  await a.close()
+  await b.close()
+
+  // Within the grace window the held host seat still exists, so a newcomer is
+  // NOT the host (the room survived; it was not wiped).
+  await sleep(1500)
+  const within = await connect(body.code, (await anonUser()).token)
+  check(
+    'refresh within grace keeps the room (held host seat => newcomer not host)',
+    within.status === 101 && within.welcome?.host === false,
+    `status ${within.status} host ${within.welcome?.host}`
+  )
+  await within.close()
+
+  // Past the dev grace (15 s) the alarm deletes all state: the same code is a
+  // clean room again — no old seats, no old host (nothing to list).
+  await sleep(16000)
+  const after = await connect(body.code, (await anonUser()).token)
+  check('after grace the room is gone (404, no old seats or host)', after.status === 404, `status ${after.status}`)
+  if (after.status === 101) await after.close()
+}
+
+// ---- every outbound frame carries v === 1 -----------------------------------
+{
+  const host = await anonUser()
+  const mate = await anonUser()
+  const target = await anonUser()
+  const { body } = await createRoom(host.token)
+  const a = await connect(body.code, host.token)
+  const b = await connect(body.code, mate.token)
+  const c = await connect(body.code, target.token)
+
+  const S = '0e0a0000-0000-4000-8000-000000000077'
+  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'vk', id: S, userId: 'x', userName: 'x', color: '#112233', width: 5, pts: [1, 1] }))
+  await b.waitFor((m) => m.t === 'stroke_start' && m.id === S)
+  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_points', k: 'vk', id: S, seq: 1, pts: [2, 2] }))
+  await b.waitFor((m) => m.t === 'stroke_points' && m.id === S)
+  b.ws.send(JSON.stringify({ v: 1, t: 'cursor', k: 'vc', x: 3, y: 3 }))
+  await a.waitFor((m) => m.t === 'cursor' && m.k === 'vc')
+  a.ws.send(JSON.stringify({ v: 1, t: 'kick', userId: target.userId }))
+  await a.waitFor((m) => m.t === 'kick_ack' && m.userId === target.userId)
+  await c.waitForClose(4003)
+  await sleep(300)
+  await a.close()
+
+  const frames = [...a.json(), ...b.json(), ...c.json()]
+  check('v === 1 on every outbound frame (join/draw/kick/leave)', frames.length > 0 && frames.every((m) => m.v === 1), `${frames.length} frames`)
+}
+
 summary('rooms')

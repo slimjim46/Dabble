@@ -12,7 +12,7 @@ import { verifyAccessToken } from '../src/auth.js'
 import { verifyTurnstile } from '../src/turnstile.js'
 import { ipCapAllows, maxIpSockets, MAX_ROOMS_PER_USER_PER_HOUR, maxRoomsPerIpPerHour } from '../src/config.js'
 import { buildJoinHeaders } from '../src/forward.js'
-import { ipHashSaltOk } from '../src/hash.js'
+import { clientIpHash, hashKey, ipHashSaltOk } from '../src/hash.js'
 import { check, summary } from './helpers.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -91,6 +91,7 @@ const hostile = new Headers({
   'X-User-Name': 'EVIL',
   'X-User-Country': 'XX',
   'X-IP-Hash': 'forged-hash',
+  'X-Test-IP': '198.18.7.7',
   'X-Protocol': 'evil.v9',
   Authorization: 'Bearer eyJhbGciOi.fake.sig',
   Cookie: 'session=1',
@@ -103,6 +104,7 @@ check('client X-User replaced with the trusted one', fwdNoSalt.get('X-User') ===
 check('client X-User-Name replaced', fwdNoSalt.get('X-User-Name') === 'Guest')
 check('client X-User-Country replaced', fwdNoSalt.get('X-User-Country') === '')
 check('client X-IP-Hash dropped when no salt', fwdNoSalt.get('X-IP-Hash') === null)
+check('client X-Test-IP never forwarded to the DO', fwdNoSalt.get('X-Test-IP') === null)
 check('client X-Protocol replaced', fwdNoSalt.get('X-Protocol') === 'dabble.v1')
 check('Sec-WebSocket-Protocol never forwarded (JWT carrier)', fwdNoSalt.get('Sec-WebSocket-Protocol') === null)
 check('Authorization never forwarded', fwdNoSalt.get('Authorization') === null)
@@ -118,6 +120,51 @@ check('prod 16-char salt -> ok', ipHashSaltOk({ ENVIRONMENT: 'production', IP_HA
 check('prod long salt -> ok', ipHashSaltOk({ ENVIRONMENT: 'production', IP_HASH_SALT: 'x'.repeat(64) }) === true)
 check('dev without salt -> lenient', ipHashSaltOk({ ENVIRONMENT: 'dev' }) === true)
 check('ENVIRONMENT unset -> lenient', ipHashSaltOk({}) === true)
+
+// ---- dev-only X-Test-IP override (test isolation) --------------------------
+// One fixed salt so the module-level HMAC key cache stays consistent.
+const TEST_SALT = 's'.repeat(32)
+const reqWith = (testIp, realIp) =>
+  new Request('https://rooms/ws', {
+    headers: {
+      ...(testIp !== undefined ? { 'X-Test-IP': testIp } : {}),
+      ...(realIp ? { 'CF-Connecting-IP': realIp } : {}),
+    },
+  })
+const REAL_IP = '203.0.113.9'
+const realHash = await hashKey(TEST_SALT, REAL_IP)
+const overrideHash = await hashKey(TEST_SALT, '198.18.7.7')
+check(
+  'dev honors X-Test-IP (hashed with the same salt)',
+  (await clientIpHash(reqWith('198.18.7.7', REAL_IP), { ENVIRONMENT: 'dev', IP_HASH_SALT: TEST_SALT })) === overrideHash
+)
+for (const envVal of [undefined, 'Dev', 'development', 'staging', 'production']) {
+  check(
+    `X-Test-IP ignored when ENVIRONMENT=${String(envVal)}`,
+    (await clientIpHash(reqWith('198.18.7.7', REAL_IP), { ENVIRONMENT: envVal, IP_HASH_SALT: TEST_SALT })) === realHash
+  )
+}
+check(
+  'dev falls back to CF-Connecting-IP with no X-Test-IP',
+  (await clientIpHash(reqWith(undefined, REAL_IP), { ENVIRONMENT: 'dev', IP_HASH_SALT: TEST_SALT })) === realHash
+)
+check(
+  'dev rejects a bad-charset X-Test-IP',
+  (await clientIpHash(reqWith('not a valid ip !', REAL_IP), { ENVIRONMENT: 'dev', IP_HASH_SALT: TEST_SALT })) === realHash
+)
+check(
+  'dev rejects an over-long X-Test-IP',
+  (await clientIpHash(reqWith('1'.repeat(46), REAL_IP), { ENVIRONMENT: 'dev', IP_HASH_SALT: TEST_SALT })) === realHash
+)
+check(
+  'dev accepts an IPv6 X-Test-IP',
+  (await clientIpHash(reqWith('2001:db8::1', REAL_IP), { ENVIRONMENT: 'dev', IP_HASH_SALT: TEST_SALT })) ===
+    (await hashKey(TEST_SALT, '2001:db8::1'))
+)
+check(
+  'without a salt X-Test-IP still yields null',
+  (await clientIpHash(reqWith('198.18.7.7', REAL_IP), { ENVIRONMENT: 'dev' })) === null
+)
 
 // ---- Room creation budgets -------------------------------------------------
 check('per-IP creation default is 30', maxRoomsPerIpPerHour({}) === 30)

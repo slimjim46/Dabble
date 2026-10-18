@@ -25,6 +25,24 @@ export async function hashKey(salt, value) {
   return [...new Uint8Array(sig)].slice(0, 8).map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
+// Length-bounded charset for an IPv4/IPv6 literal (optionally with a zone).
+const TEST_IP_RE = /^[0-9A-Fa-f:.%]{1,45}$/
+
+/**
+ * The IP used for per-IP limits. A dev-only test hook lets each test run use
+ * a distinct bucket so the per-IP limits cannot leak between back-to-back
+ * runs. It is honored ONLY when ENVIRONMENT is exactly 'dev': unset, 'Dev',
+ * 'development', 'staging' and 'production' all ignore it. Anything that
+ * could be a spoof vector in production never gets here.
+ */
+function resolveClientIp(request, env) {
+  if (env.ENVIRONMENT === 'dev') {
+    const testIp = request.headers.get('X-Test-IP')
+    if (typeof testIp === 'string' && TEST_IP_RE.test(testIp)) return testIp
+  }
+  return request.headers.get('CF-Connecting-IP')
+}
+
 /** Hash of the request's client IP, or null when no salt is configured. */
 export async function clientIpHash(request, env) {
   const salt = env.IP_HASH_SALT
@@ -32,7 +50,7 @@ export async function clientIpHash(request, env) {
     logEvent('ip_salt_missing')
     return null
   }
-  const ip = request.headers.get('CF-Connecting-IP')
+  const ip = resolveClientIp(request, env)
   if (!ip) return null
   return hashKey(salt, ip)
 }

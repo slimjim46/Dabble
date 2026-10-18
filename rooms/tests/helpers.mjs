@@ -39,6 +39,12 @@ export { SUPABASE_URL, ANON_KEY }
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+// Per-run unique IP sent as X-Test-IP. The dev Worker honors it (and only in
+// dev) so back-to-back runs never share a per-IP rate-limit bucket: without
+// it the JOIN_IP / per-IP-creation limits leak across runs. Random in the
+// 198.18.0.0/15 benchmarking range.
+export const TEST_IP = `198.18.${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}`
+
 let pass = 0
 let fail = 0
 export function check(name, ok, detail = '') {
@@ -67,7 +73,7 @@ export async function anonUser() {
 export async function createRoom(token, extra = {}, headerExtra = {}) {
   const res = await fetch(`${TARGET}/rooms`, {
     method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json', ...headerExtra },
+    headers: { Authorization: `Bearer ${token}`, 'content-type': 'application/json', 'X-Test-IP': TEST_IP, ...headerExtra },
     body: JSON.stringify(extra),
   })
   const body = await res.json().catch(() => null)
@@ -82,7 +88,7 @@ export const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{5}$/
  */
 export function probeWs(room, protocols = [], headers = {}) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${TARGET}/ws?room=${room}`, protocols, { headers })
+    const ws = new WebSocket(`${TARGET}/ws?room=${room}`, protocols, { headers: { 'X-Test-IP': TEST_IP, ...headers } })
     let done = false
     const timer = setTimeout(() => {
       if (!done) {

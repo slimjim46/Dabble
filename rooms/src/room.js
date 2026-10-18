@@ -135,6 +135,15 @@ export class Room {
       .filter(Boolean)
   }
 
+  // Count of live sockets. A socket inside its own webSocketClose is still in
+  // getWebSockets() but is already CLOSING, so a raw length check would never
+  // see an empty room and the grace alarm would never be scheduled.
+  openSocketCount() {
+    let n = 0
+    for (const ws of this.state.getWebSockets()) if (ws.readyState === OPEN) n++
+    return n
+  }
+
   // ---- Timers (one alarm for everything) ---------------------------------
 
   async rearm() {
@@ -145,7 +154,7 @@ export class Room {
     for (const s of Object.values(room.seats)) {
       if (s.heldUntil) deadlines.push(s.heldUntil)
     }
-    if (this.state.getWebSockets().length === 0 && room.lastEmptyAt) {
+    if (this.openSocketCount() === 0 && room.lastEmptyAt) {
       deadlines.push(room.lastEmptyAt + this.graceMs())
     }
     try {
@@ -213,7 +222,7 @@ export class Room {
 
     // Empty-room grace.
     if (
-      this.state.getWebSockets().length === 0 &&
+      this.openSocketCount() === 0 &&
       room.lastEmptyAt &&
       now >= room.lastEmptyAt + this.graceMs()
     ) {
@@ -600,7 +609,7 @@ export class Room {
       }
     }
 
-    if (this.state.getWebSockets().length === 0) {
+    if (this.openSocketCount() === 0) {
       room.lastEmptyAt = room.lastEmptyAt || Date.now()
       await this.save()
     }
