@@ -103,7 +103,7 @@ export function probeWs(room, protocols = [], headers = {}) {
       clearTimeout(timer)
       let body = ''
       res.on('data', (c) => (body += c))
-      res.on('end', () => resolve({ status: res.statusCode, body }))
+      res.on('end', () => resolve({ status: res.statusCode, body, headers: res.headers }))
       res.resume()
     })
     ws.on('error', () => {}) // surfaces via unexpected-response or close
