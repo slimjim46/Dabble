@@ -350,4 +350,46 @@ import { anonUser, check, CODE_RE, connect, createRoom, probeWs, sleep, summary 
   check('rate limit carries Retry-After', !!sixth.headers.get('retry-after'))
 }
 
+// ---- stroke_cancel when the artist's socket dies mid-stroke ------------------
+{
+  const artist = await anonUser()
+  const watcher = await anonUser()
+  const { body } = await createRoom(artist.token)
+  const a = await connect(body.code, artist.token)
+  const w = await connect(body.code, watcher.token)
+
+  const S = '0e0a0000-0000-4000-8000-000000000033'
+  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'open-at-close', id: S, userId: 'x', userName: 'x', color: '#112233', width: 5, pts: [1, 1] }))
+  const started = await w.waitFor((m) => m.t === 'stroke_start' && m.id === S)
+  check('watcher sees the stroke start before the close', !!started)
+
+  await a.close()
+  const cancel = await w.waitFor((m) => m.t === 'stroke_cancel' && m.id === S)
+  check('artist close mid-stroke broadcasts stroke_cancel with the original k', !!cancel && cancel.k === 'open-at-close')
+  await w.close()
+}
+
+// ---- stroke_cancel when a 4009 replace tears down the artist ----------------
+{
+  const artist = await anonUser()
+  const watcher = await anonUser()
+  const { body } = await createRoom(artist.token)
+  const tab1 = await connect(body.code, artist.token)
+  const w = await connect(body.code, watcher.token)
+
+  const S = '0e0a0000-0000-4000-8000-000000000044'
+  tab1.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'open-at-replace', id: S, userId: 'x', userName: 'x', color: '#112233', width: 5, pts: [2, 2] }))
+  const started = await w.waitFor((m) => m.t === 'stroke_start' && m.id === S)
+  check('watcher sees the stroke start before the replace', !!started)
+
+  const tab2 = await connect(body.code, artist.token) // same user: tab1 closed 4009
+  const replaced = await tab1.waitForClose(4009)
+  check('old tab closed with 4009', !!replaced)
+  const cancel = await w.waitFor((m) => m.t === 'stroke_cancel' && m.id === S)
+  check('replaced socket mid-stroke broadcasts stroke_cancel with the original k', !!cancel && cancel.k === 'open-at-replace')
+
+  await tab2.close()
+  await w.close()
+}
+
 summary('rooms')

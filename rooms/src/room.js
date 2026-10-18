@@ -278,7 +278,7 @@ export class Room {
     if (room.blocked[userId]) {
       const [client, server] = Object.values(new WebSocketPair())
       this.state.acceptWebSocket(server)
-      server.serializeAttachment({ userId, seat: null, name: '', country: null, ipHash, open: null, v: 0, b: {} })
+      server.serializeAttachment({ userId, seat: null, name: '', country: null, ipHash, open: null, openK: null, v: 0, b: {} })
       server.close(KICK_CLOSE, 'kicked')
       logEvent('rejoin_blocked')
       return new Response(null, { status: 101, webSocket: client, headers: acceptHeaders })
@@ -341,6 +341,7 @@ export class Room {
         : null,
       ipHash,
       open: null, // stroke ownership: id of this connection's open stroke
+      openK: null, // ...and its wire key, echoed if the socket dies first
       v: 0, // violation counter
       b: {}, // per-type rate buckets
     })
@@ -489,11 +490,15 @@ export class Room {
     if (type === 'stroke_start') {
       if (att.open) return false // max one open stroke per connection
       att.open = p.id
+      att.openK = p.k // echoed in stroke_cancel if this socket dies mid-stroke
       return true
     }
     const id = type === 'stroke_end' ? p.stroke.id : p.id
     if (att.open !== id) return false
-    if (type === 'stroke_end' || type === 'stroke_cancel') att.open = null
+    if (type === 'stroke_end' || type === 'stroke_cancel') {
+      att.open = null
+      att.openK = null
+    }
     return true
   }
 
@@ -560,6 +565,16 @@ export class Room {
     const room = await this.load()
     logEvent('disconnect_enter', { hasAtt: !!att, hasRoom: !!room, open: this.state.getWebSockets().length })
     if (!room || !att) return
+
+    // The artist vanished mid-stroke (close, replace-4009, kick): tell the
+    // others to drop the dangling line. Deliberately OUTSIDE the
+    // remaining-count logic below: on a 4009 replace the same user's NEW
+    // socket is already connected, so remaining !== 0. If webSocketClose
+    // and webSocketError both fire this can duplicate — cancels are
+    // idempotent for clients.
+    if (att.open && att.openK) {
+      this.broadcast({ v: 1, t: 'stroke_cancel', k: att.openK, id: att.open }, ws)
+    }
 
     let remaining = 0
     for (const w of this.state.getWebSockets()) {
