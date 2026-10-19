@@ -1,0 +1,40 @@
+# Runs the rooms test suite against the DEV Worker. Manual only: the suite
+# signs in anonymous users and creates real rooms, so it must never run on
+# every push or on a schedule.
+#
+# Owner setup (once), under Settings -> Secrets and variables -> Actions:
+#   Variables: ROOMS_ALLOWED_URL = https://dabble-rooms-dev.rowan-dev-workers.workers.dev
+#              SUPABASE_URL      = <dev project URL>
+#   Secrets:   SUPABASE_ANON_KEY = <dev anon key>   (public key; never service_role)
+#
+# The suite refuses to run unless ROOMS_ALLOWED_URL matches the target it
+# connects to, so a stray value can never point it at production.
+
+name: Rooms tests
+
+on:
+  workflow_dispatch:
+
+jobs:
+  rooms:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rooms
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: rooms/package-lock.json
+
+      - run: npm ci
+
+      - name: Run rooms tests against dev
+        run: npm test
+        env:
+          ROOMS_ALLOWED_URL: ${{ vars.ROOMS_ALLOWED_URL }}
+          SUPABASE_URL: ${{ vars.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}

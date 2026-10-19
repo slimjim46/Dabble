@@ -5,22 +5,59 @@
 // Supabase env comes from the repo-root .env (dev project only). No value
 // that could be a key or token is ever printed.
 import { createClient } from '@supabase/supabase-js'
+import dns from 'node:dns'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
+import { Agent, setGlobalDispatcher } from 'undici'
 import WebSocket from 'ws'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 
 function loadRootEnv() {
+  let text
+  try {
+    text = readFileSync(path.join(here, '..', '..', '.env'), 'utf8')
+  } catch {
+    return {} // CI: config comes from the workflow env, not a .env file
+  }
   const out = {}
-  for (const line of readFileSync(path.join(here, '..', '..', '.env'), 'utf8').split('\n')) {
+  for (const line of text.split('\n')) {
     const m = /^([A-Z0-9_]+)=(.*)$/.exec(line.trim())
     if (m) out[m[1]] = m[2]
   }
   return out
 }
 const rootEnv = loadRootEnv()
+
+// On WSL2 the nameserver is the NAT DNS proxy (10.255.255.254): every
+// getaddrinfo is a virtual-switch round trip and, under the libuv 4-thread
+// pool, parallel lookups queue (~200 ms for 24 vs ~50 ms uncapped). The suite
+// resolves essentially one host (the dev worker) plus Supabase, and repeated
+// lookups of the same host occasionally stalled a WebSocket handshake past
+// the 12 s probe timeout. Memoise the first result per (host, all): no lookup
+// is repeated, and a genuinely failing host still errors on the first call.
+const dnsCache = new Map()
+export function cachedLookup(hostname, options, callback) {
+  if (typeof options === 'function') {
+    callback = options
+    options = {}
+  }
+  options = options || {}
+  const key = `${hostname}|${options.all ? 'a' : 's'}`
+  const hit = dnsCache.get(key)
+  if (hit) {
+    return queueMicrotask(() => (options.all ? callback(null, hit) : callback(null, hit.address, hit.family)))
+  }
+  return dns.lookup(hostname, options, (err, address, family) => {
+    if (!err) dnsCache.set(key, options.all ? address : { address, family })
+    callback(err, address, family)
+  })
+}
+
+// Route fetch()/supabase-js through the same cache (undici), and ws via its
+// own `lookup` option below.
+setGlobalDispatcher(new Agent({ connect: { lookup: cachedLookup } }))
 
 export const TARGET = process.env.ROOMS_TARGET_URL || 'https://dabble-rooms-dev.rowan-dev-workers.workers.dev'
 const ALLOWED = process.env.ROOMS_ALLOWED_URL
@@ -88,7 +125,10 @@ export const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{5}$/
  */
 export function probeWs(room, protocols = [], headers = {}) {
   return new Promise((resolve, reject) => {
-    const ws = new WebSocket(`${TARGET}/ws?room=${room}`, protocols, { headers: { 'X-Test-IP': TEST_IP, ...headers } })
+    const ws = new WebSocket(`${TARGET}/ws?room=${room}`, protocols, {
+      headers: { 'X-Test-IP': TEST_IP, ...headers },
+      lookup: cachedLookup,
+    })
     let done = false
     const timer = setTimeout(() => {
       if (!done) {

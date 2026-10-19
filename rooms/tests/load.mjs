@@ -2,18 +2,23 @@
 // only in a UTC window with no other dev usage.
 //
 //   ROOMS_ALLOWED_URL=https://dabble-rooms-dev.rowan-dev-workers.workers.dev \
-//     LOAD_CONFIRM=yes node tests/load.mjs
+//     LOAD_CONFIRM=yes LOAD_LEDGER=rooms/tests/ledger.jsonl node tests/load.mjs
 //
 // Shape per room: 1 drawer (stroke @ DRAW_HZ) + (CLIENTS-1) watchers
 // (cursor @ CURSOR_HZ). Defaults keep the run under ~300 billed requests.
 // Budget:    billed = connections + incomingMessages/20 + alarms
 //   - one 10-min 10-player game: 10 + (14 + 9*4)*600/20 = 1510 + alarms.
 //
+// LOAD_LEDGER appends one metrics-only JSONL row (window start/end in UTC and
+// Europe/Amsterdam) for free-tier reconciliation. Never contains tokens, IPs,
+// names, or room codes.
+//
 // Before running, read the Cloudflare dashboards for the "before" numbers:
 //   Workers & Pages -> dabble-rooms-dev -> Metrics            (Requests, Errors)
 //   Workers & Pages -> Durable Objects -> Room namespace -> Metrics
 //                                                             (Requests, Duration)
 // Record the displayed time range.
+import { appendFileSync } from 'node:fs'
 import { anonUser, check, connect, createRoom, summary } from './helpers.mjs'
 
 const ROOMS = Number(process.env.ROOMS || 4)
@@ -25,6 +30,16 @@ const MAX_BILLED = 20000
 
 const randKey = () => 'k' + Math.random().toString(36).slice(2, 12)
 const uid = () => crypto.randomUUID()
+
+// The Cloudflare dashboards render in the owner's local zone, which is
+// Europe/Amsterdam (GMT+2). Record both clocks so a captured window can be
+// matched to the dashboard exactly.
+const AMS = new Intl.DateTimeFormat('sv-SE', {
+  timeZone: 'Europe/Amsterdam',
+  dateStyle: 'short',
+  timeStyle: 'medium',
+})
+const amsterdam = (d) => AMS.format(d)
 
 // ---- Projection first: refuse to run if the estimate is too big ----------
 const perRoomMsgsPerSec = DRAW_HZ + (CLIENTS - 1) * CURSOR_HZ
@@ -114,7 +129,8 @@ for (let r = 0; r < ROOMS; r++) {
 check('load: all rooms and sockets up', stats.failed === 0 && rooms.length === ROOMS, `${rooms.length}/${ROOMS} rooms, failed=${stats.failed}`)
 
 // ---- Run ------------------------------------------------------------------
-const startISO = new Date().toISOString()
+const startAt = new Date()
+const startISO = startAt.toISOString()
 const deadline = Date.now() + SECONDS * 1000
 const timers = []
 for (const { code, drawer, watchers } of rooms) {
@@ -137,10 +153,11 @@ for (const { code, drawer, watchers } of rooms) {
     )
   }
 }
-console.log(`load window start (UTC): ${startISO}`)
+console.log(`load window start: ${startISO} (UTC) / ${amsterdam(startAt)} (Europe/Amsterdam)`)
 while (Date.now() < deadline) await new Promise((r) => setTimeout(r, 250))
 for (const t of timers) clearInterval(t)
-const endISO = new Date().toISOString()
+const endAt = new Date()
+const endISO = endAt.toISOString()
 
 // Close everything.
 for (const { drawer, watchers } of rooms) {
@@ -156,7 +173,7 @@ function percentile(arr, p) {
 }
 
 const billed = Math.round(connections + stats.sent / 20 + alarms)
-console.log(`load window end   (UTC): ${endISO}`)
+console.log(`load window end:   ${endISO} (UTC) / ${amsterdam(endAt)} (Europe/Amsterdam)`)
 console.log(
   `--- load counters: connections=${connections} sockets_failed=${stats.failed} sent=${stats.sent} ` +
     `received=${stats.recv} clientErrors=${stats.errors} unexpectedCloses=${stats.unexpected.length} ` +
@@ -164,6 +181,35 @@ console.log(
 )
 console.log(`--- projected billed requests for this run: ${billed} (projection ${projected})`)
 console.log(`--- projection for ONE 10-min 10-player game: ${game10x10} billed requests (+ alarms)`)
+
+// One JSONL row per run. Contains metrics only: no tokens, IPs, names, or
+// room codes. Committed so the free-tier reconciliation has a machine-readable
+// record of every run.
+if (process.env.LOAD_LEDGER) {
+  const row = {
+    run: endISO,
+    start_utc: startISO,
+    end_utc: endISO,
+    start_ams: amsterdam(startAt),
+    end_ams: amsterdam(endAt),
+    rooms: ROOMS,
+    clients: CLIENTS,
+    seconds: SECONDS,
+    draw_hz: DRAW_HZ,
+    cursor_hz: CURSOR_HZ,
+    connections,
+    incoming: stats.sent,
+    alarms,
+    projected_billed: billed,
+    received: stats.recv,
+    clientErrors: stats.errors,
+    unexpectedCloses: stats.unexpected.length,
+    p50: percentile(lat, 50),
+    p95: percentile(lat, 95),
+  }
+  appendFileSync(process.env.LOAD_LEDGER, JSON.stringify(row) + '\n')
+  console.log(`--- appended ledger row to ${process.env.LOAD_LEDGER}`)
+}
 
 check('load: no unexpected server-initiated closes', stats.unexpected.length === 0)
 check('load: broadcast latency p95 under 1000ms', (percentile(lat, 95) ?? 9999) < 1000)
