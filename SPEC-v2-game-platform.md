@@ -167,6 +167,16 @@ live site.
   timelapse in the browser.
 - Country vs country scoreboards, building on the existing country leaderboard.
 - Streaks for the Daily Challenge.
+- Plaza "Play" panel (polish; only after the core games in v2 Phases 3 to 6
+  work): make the plaza an interactive main menu. People keep drawing on the
+  shared canvas while a small panel offers Play with friends, Join with code
+  and the Daily Challenge. The paper stays the star, mobile portrait first,
+  and a menu item appears only once the feature behind it exists. Plaza files
+  change in small, separately approved diffs (the "Play with friends" footer
+  link is the first piece). New screens reuse shared CSS classes and the
+  existing colour variables so this is a restyle, not a rewrite. Before
+  promoting the plaza as a hangout, find out how many simultaneous drawers it
+  actually handles; do not assume 10 to 20.
 - Launch channels: Reddit game communities, Show HN, itch.io, friends-first sharing.
 
 ### v2 Phase 8: Progression and unlocks (after the core games work)
