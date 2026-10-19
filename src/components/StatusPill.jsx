@@ -47,7 +47,7 @@ export default function StatusPill({ status, online, saving, countries, ownerNam
         ) : null}
         {roomsHref ? (
           <span className="status-footer-item">
-            <a href={roomsHref} title="Draw together in a private room">Play with friends</a>
+            <a href={roomsHref} className="status-footer-link" title="Draw together in a private room">Play with friends</a>
           </span>
         ) : null}
       </div>

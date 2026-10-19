@@ -903,6 +903,14 @@ function sourceCode(rel) {
     !pill.includes('onClick') && !pill.includes('<button'))
   check('StatusPill: no worker URL is ever carried by the plaza',
     !pill.includes('workers.dev') && !pill.includes('VITE_ROOMS_URL'))
+  check('StatusPill: the rooms link carries the tap-target class',
+    pill.includes('status-footer-link'))
+
+  // B9: the tap target is padding on the link only, cancelled by a negative
+  // margin so the footer row's height does not change (no layout shift).
+  const css = sourceCode('src/index.css')
+  check('index.css: the tap target is padding on the link, offset by a negative margin',
+    /\.status-footer-link\s*\{[^}]*padding:[^}]*\}/.test(css) && /\.status-footer-link\s*\{[^}]*margin:\s*-/.test(css))
 
   // No plaza file may read the variable itself: the gate lives in
   // src/lib/roomsEntry.js, so the plaza cannot grow a second way to point at
@@ -935,7 +943,7 @@ function sourceCode(rel) {
     'src/lib/wire.js',
     'src/lib/stroke.js',
   ]
-  const ALLOWED = new Set(['src/components/StatusPill.jsx'])
+  const ALLOWED = new Set(['src/components/StatusPill.jsx', 'src/index.css'])
 
   let git = null
   try {
