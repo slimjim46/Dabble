@@ -33,8 +33,10 @@ live site.
 - Auth: `Sec-WebSocket-Protocol: dabble.v1, <supabase jwt>` only. The Worker
   verifies the JWT; the Durable Object never sees a token.
 - Identity (name, country, ban) comes from the server, never from client messages.
-- Room state lives in memory only. Nothing about a live room is written to
-  Supabase. Only results and notable drawings are persisted, in later phases.
+- Room state lives in the Durable Object only (memory plus its own storage for
+  the current round's strokes, cleared each round). Nothing about a live room
+  is written to Supabase. Only results and notable drawings are persisted, in
+  later phases.
 - Cost model: billed requests = connections + incoming WebSocket messages / 20.
   Outgoing messages are free. Ping/pong uses the auto-response and is not
   expected to wake the Durable Object. A 10-minute drawer-only game is about
@@ -43,9 +45,9 @@ live site.
 
 ## Open decisions
 
-- **Late join:** the server currently relays strokes but may not send existing
-  canvas state to a player who joins mid-round. Decide the design (server-held
-  strokes for the current round, in memory) during v2 Phase 3. Never fake it on the client.
+- **Late join:** decided in v2 Phase 3: the server holds the strokes of the
+  current round in the Durable Object's own storage (cleared each round) and
+  sends them to a player who joins mid-round. Never fake it on the client.
 - **Prep for v2 Phase 8, do before the room client hardcodes the wire format:**
   (1) a brush id and the protocol version in stroke messages (everyone uses brush 0);
   (2) validate colours against a server-side list instead of any hex value;
@@ -75,7 +77,9 @@ live site.
 - No free chat in version 1, only a guess box. That removes most moderation and
   child-safety problems.
 - The server decides everything that matters: the secret word, timers and scores.
-- Keep per-room data in memory and throw it away. Save only what is worth keeping.
+- Keep per-room data in the Durable Object and throw it away. Its storage
+  holds only the current round's strokes, cleared each round. Save only what
+  is worth keeping.
 - Spend nothing until the numbers justify it.
 
 ## 3. Architecture
