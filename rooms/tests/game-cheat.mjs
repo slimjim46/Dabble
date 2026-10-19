@@ -83,5 +83,36 @@ for (let i = 0; i < 40; i++) back.ws.send(start)
 const flooded = await back.waitForClose(1008, 5000)
 check('a sustained flood closes 1008', !!flooded, JSON.stringify(back.closes))
 
+// 7. The drawer gate must NOT shelter a flood: ignored strokes are still
+// billed and still count against the per-type budget, so a non-drawer stroke
+// flood closes 1008 exactly like any other flood. Start a fresh game and
+// flood with stroke_points while a bystander is connected.
+{
+  const fHost = await anonUser()
+  const fb = await createRoom(fHost.token)
+  const fCode = fb.body.code
+  const fA = await connect(fCode, fHost.token)
+  const fU2 = await anonUser()
+  const fB = await connect(fCode, fU2.token)
+  fA.ws.send(start)
+  const fPick = await fA.waitFor((m) => m.t === 'state' && m.phase === 'pick', 8000)
+  // Whoever is not the round-1 drawer floods with stroke_points. Let the
+  // drawer pick first so the gate is exercised inside the drawing phase.
+  const drawerConn = fPick?.drawer === fHost.userId ? fA : fB
+  const flooder = drawerConn === fA ? fB : fA
+  await drawerConn.waitFor((m) => m.t === 'word_pick', 5000)
+  drawerConn.ws.send(pick(0))
+  await drawerConn.waitFor((m) => m.t === 'state' && m.phase === 'drawing', 5000)
+  const wid = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
+  for (let i = 0; i < 80; i++) {
+    flooder.ws.send(JSON.stringify({ v: 1, t: 'stroke_points', k: 'f', id: wid, seq: i + 1, pts: [1, 1] }))
+  }
+  const fClosed = await flooder.waitForClose(1008, 5000)
+  check('a non-drawer stroke flood still closes 1008 (ignored but budget-counted)',
+    !!fClosed, JSON.stringify(flooder.closes))
+  await fA.close()
+  await fB.close()
+}
+
 for (const c of [a, b, x, back].filter((c) => !c.closed)) await c.close()
 summary('game-cheat')

@@ -264,6 +264,9 @@ async function newRoom(seed = {}, env = ENV) {
   // The DO is evicted between the start alarm and the pick timeout.
   const second = await newRoom(Object.fromEntries(first.state.map))
   const r2 = await second.room.load()
+  // Eviction closes the drawer's socket: their seat is held (reconnectable),
+  // not released, so the pick deadline still governs the round.
+  r2.seats.u1.heldUntil = Date.now() + 100000
   check('hibernate: the second instance reloads the same game',
     r2.game.phase === 'pick' && r2.game.rounds === r1.game.rounds && r2.game.gameSeq === 1)
   check('hibernate: options survive in storage', JSON.stringify(r2.game.options) === JSON.stringify(options))
@@ -309,6 +312,87 @@ async function newRoom(seed = {}, env = ENV) {
   const stored = await room.storeRoundStroke(r, stroke('33333333-3333-4333-8333-333333333333'))
   check('storage: a failed stroke put returns false and flags partial', stored === false && r.game.partial === true)
   check('storage: the busy notice is rate-limited, not repeated', peer.frames.filter((f) => f.t === 'error').length === 1)
+}
+
+// ---- stroke gating: only the current drawer, only while drawing ------------
+{
+  const game = { ...newGameState(), gameSeq: 1, phase: 'drawing', round: 1, rounds: 6, order: ['u1', 'u2'], drawerUserId: 'u1', word: 'pizza' }
+  const { state, room } = await newRoom({ room: seededRoom(game) })
+  const r = await room.load()
+  const drawer = fakeSocket('u1')
+  const bystander = fakeSocket('u2')
+  bystander.closes = []
+  bystander.close = (code) => bystander.closes.push(code)
+  state.sockets.push(drawer, bystander)
+
+  const startFrame = JSON.stringify({ v: 1, t: 'stroke_start', k: 'k', id: '55555555-5555-4555-8555-555555555555', userId: 'x', userName: 'x', color: '#e5484d', width: 4, pts: [1, 1] })
+  const endFrame = JSON.stringify({
+    v: 1, t: 'stroke_end', k: 'k',
+    stroke: { id: '55555555-5555-4555-8555-555555555555', userId: 'x', userName: 'x', color: '#e5484d', width: 4, points: [1, 1, 2, 2] },
+  })
+
+  // The drawer paints: relayed and stored.
+  await room.webSocketMessage(drawer, startFrame)
+  await room.webSocketMessage(drawer, endFrame)
+  check('gate: the drawer\'s stroke is relayed', bystander.frames.some((f) => f.t === 'stroke_end'))
+  check('gate: the drawer\'s stroke is stored',
+    [...state.map.keys()].some((k) => k.startsWith(roundKey(1, 1, 0).slice(0, -6))))
+
+  // A bystander paints: ignored, never relayed, never stored.
+  const before = bystander.frames.length
+  await room.webSocketMessage(bystander, startFrame)
+  await room.webSocketMessage(bystander, endFrame)
+  check('gate: a bystander stroke is never relayed',
+    !bystander.frames.slice(before).some((f) => f.t === 'stroke_start' || f.t === 'stroke_end'))
+  check('gate: a bystander stroke is not stored', r.game.count === 1, String(r.game.count))
+  check('gate: a bystander stroke does not close or violate the socket',
+    bystander.closes.length === 0 && bystander.att.v === 0, JSON.stringify({ closes: bystander.closes, v: bystander.att.v }))
+
+  // Wrong phase: even the drawer's stroke is ignored outside drawing.
+  r.game.phase = 'reveal'
+  const before2 = bystander.frames.length
+  await room.webSocketMessage(drawer, startFrame)
+  check('gate: a stroke outside drawing is ignored',
+    !bystander.frames.slice(before2).some((f) => f.t === 'stroke_start'))
+  r.game.phase = 'drawing'
+}
+
+// ---- drawer grace only applies to a HELD seat ------------------------------
+{
+  // Seat released (kicked / hold expired): skip the round at the next alarm,
+  // with no waiting for the grace.
+  const game = {
+    ...newGameState(), gameSeq: 1, phase: 'drawing', round: 1, rounds: 6, order: ['u1', 'u2', 'u3'],
+    drawerUserId: 'u1', word: 'pizza',
+    phaseEndsAt: Date.now() + 100000, deadlineAt: Date.now() + 100000,
+  }
+  const seed = seededRoom(game)
+  seed.seats.u3 = { seat: 2, claimedAt: 3, heldUntil: null }
+  seed.nextSeat = 3
+  delete seed.seats.u1 // the drawer's seat was released; two seats remain
+  const { state, room } = await newRoom({ room: seed })
+  const r = await room.load()
+  const ws = fakeSocket('u2')
+  state.sockets.push(ws)
+  await room.alarm()
+  check('grace: a released drawer is skipped immediately (no grace wait)',
+    r.game.phase === 'reveal' && r.game.skipped === true, JSON.stringify({ phase: r.game.phase, skipped: r.game.skipped }))
+  check('grace: the immediate skip never sets a grace deadline', r.game.drawerGraceAt === 0)
+
+  // Held seat inside the grace: the round is NOT skipped yet.
+  const game2 = {
+    ...newGameState(), gameSeq: 1, phase: 'drawing', round: 1, rounds: 6, order: ['u1', 'u2'],
+    drawerUserId: 'u1', word: 'pizza', drawerGraceAt: Date.now() + 100000,
+    phaseEndsAt: Date.now() + 100000, deadlineAt: Date.now() + 100000,
+  }
+  const seed2 = seededRoom(game2)
+  seed2.seats.u1.heldUntil = Date.now() + 100000
+  const { state: state2, room: room2 } = await newRoom({ room: seed2 })
+  const r2 = await room2.load()
+  state2.sockets.push(fakeSocket('u2'))
+  await room2.alarm()
+  check('grace: a held drawer inside the grace is still drawing',
+    r2.game.phase === 'drawing' && r2.game.drawerGraceAt > 0, JSON.stringify({ phase: r2.game.phase }))
 }
 
 summary('game-storage-unit')

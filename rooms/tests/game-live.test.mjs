@@ -12,6 +12,17 @@ const start = JSON.stringify({ v: 1, t: 'start' })
 const kick = (userId) => JSON.stringify({ v: 1, t: 'kick', userId })
 const revealed = (hint) => [...(hint || '')].filter((c) => c !== '_' && c !== ' ').length
 
+// A complete stroke for one wire key: start (first point), one points batch,
+// end. Enough to exercise the drawer gate end to end.
+function strokeFrames(k, id) {
+  const base = { v: 1, k, id, userId: 'x', userName: 'x', color: '#30a46c', width: 5 }
+  return {
+    start: JSON.stringify({ ...base, t: 'stroke_start', pts: [10, 10] }),
+    points: JSON.stringify({ v: 1, t: 'stroke_points', k, id, seq: 1, pts: [20, 20, 30, 30] }),
+    end: JSON.stringify({ v: 1, t: 'stroke_end', k, stroke: { id, userId: 'x', userName: 'x', color: '#30a46c', width: 5, points: [10, 10, 20, 20, 30, 30] } }),
+  }
+}
+
 async function roomWith(n) {
   const host = await anonUser()
   const { status, body } = await createRoom(host.token)
@@ -244,7 +255,8 @@ const closeAll = async (conns) => {
 }
 
 // ===========================================================================
-// E. Kick the drawer: grace expires -> skipped reveal, kicked socket 4003.
+// E. Kick the drawer: the released seat skips the round immediately (no
+//    grace wait), kicked socket 4003.
 // ===========================================================================
 {
   const { users, conns } = await roomWith(3)
@@ -263,12 +275,56 @@ const closeAll = async (conns) => {
   const closed = await p2.waitForClose(4003, 5000)
   check('E: the kicked drawer socket closes 4003', !!closed, JSON.stringify(p2.closes))
   const rev = await host.waitFor((m) => m.t === 'reveal' && m.round === 2, 10000)
-  check('E: the kicked drawer\'s round is skipped after grace',
+  check('E: the kicked drawer\'s released seat skips the round immediately',
     !!rev && rev.skipped === true && rev.word === null, JSON.stringify(rev))
   check('E: the remaining players never saw the drawer options',
     !p3.json().some((m) => m.t === 'word_pick' || m.t === 'your_word'))
   await host.close()
   await p3.close()
+}
+
+// ===========================================================================
+// F. Only the current drawer may paint, and only while drawing. A stroke from
+//    anyone else (or in another phase) is silently ignored: no relay, no
+//    store, and it still counts against the sender's message budget.
+// ===========================================================================
+{
+  const { users, conns } = await roomWith(2)
+  const [host, peer] = conns
+  host.ws.send(start)
+  await host.waitFor((m) => m.t === 'state' && m.phase === 'pick' && m.round === 1, 8000)
+  await host.waitFor((m) => m.t === 'word_pick' && m.round === 1, 5000)
+
+  // During pick nobody may paint.
+  const beforePick = peer.json().length
+  host.ws.send(strokeFrames('p', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa').start)
+  await sleep(300)
+  check('F: a stroke during pick is ignored',
+    !peer.json().slice(beforePick).some((m) => m.t === 'stroke_start'))
+
+  host.ws.send(pick(0))
+  await host.waitFor((m) => m.t === 'state' && m.phase === 'drawing' && m.round === 1, 5000)
+
+  // The non-drawer paints: ignored.
+  const before = peer.json().length
+  peer.ws.send(strokeFrames('n', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb').start)
+  peer.ws.send(strokeFrames('n', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb').end)
+  await sleep(400)
+  check('F: a non-drawer stroke is never relayed',
+    !peer.json().slice(before).some((m) => m.t === 'stroke_start' || m.t === 'stroke_end'))
+  check('F: the non-drawer stays connected (ignored, not punished)', !peer.closed)
+
+  // The drawer paints: relayed to the peer.
+  peer.messages.length = 0
+  const f = strokeFrames('d', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc')
+  host.ws.send(f.start)
+  host.ws.send(f.points)
+  host.ws.send(f.end)
+  const relayed = await peer.waitFor((m) => m.t === 'stroke_end', 4000)
+  check('F: the drawer\'s stroke is relayed', !!relayed, JSON.stringify(peer.json().slice(-3)))
+
+  await host.close()
+  await peer.close()
 }
 
 summary('game-live')

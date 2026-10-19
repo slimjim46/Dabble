@@ -2,7 +2,7 @@
 // hints, the secret gate and the public frames. Pure, no network.
 //
 //   node tests/game-unit.test.mjs
-import { HINT_FRACTIONS, PHASES, TARGET_ROUNDS, WORD_OPTIONS } from '../src/config.js'
+import { GAME_TIMING, HINT_FRACTIONS, PHASES, TARGET_ROUNDS, WORD_OPTIONS, gameTimings } from '../src/config.js'
 import {
   acceptPick,
   advance,
@@ -242,6 +242,53 @@ const PLAYERS = ['u1', 'u2', 'u3']
   check('frame: word_pick is v1', wp.v === 1 && wp.t === 'word_pick')
   const toLobbied = toLobby(g)
   check('frame: lobby state has no drawer and zero remaining', stateFrame(toLobbied, T0).drawer === null && stateFrame(toLobbied, T0).remainingMs === 0)
+}
+
+// ---- phase timings: dev-only env overrides ---------------------------------
+{
+  check('timings: production defaults are the spec values',
+    GAME_TIMING.pick === 10000 && GAME_TIMING.drawing === 60000 && GAME_TIMING.reveal === 8000 &&
+    GAME_TIMING.scores === 8000 && GAME_TIMING.gameOver === 30000 && GAME_TIMING.drawerGrace === 10000,
+    JSON.stringify(GAME_TIMING))
+
+  const dev = { ENVIRONMENT: 'dev', GAME_PICK_MS: '1000', GAME_ROUND_MS: '5000', DRAWER_GRACE_MS: '2500' }
+  const overridden = gameTimings(dev)
+  check('timings: dev overrides apply under ENVIRONMENT=dev',
+    overridden.pick === 1000 && overridden.drawing === 5000 && overridden.drawerGrace === 2500,
+    JSON.stringify(overridden))
+
+  // Anything that is not exactly 'dev' must ignore every override, the same
+  // rule as X-Test-IP (rooms/src/hash.js) and SIMULATE_QUOTA.
+  const notDev = ['production', 'Development', 'dev ', 'DEV', 'staging', undefined, '', 'prod']
+  for (const value of notDev) {
+    const t = gameTimings({ ENVIRONMENT: value, GAME_ROUND_MS: '1', DRAWER_GRACE_MS: '1' })
+    check(`timings: ENVIRONMENT=${JSON.stringify(value)} ignores the overrides`,
+      t.drawing === GAME_TIMING.drawing && t.drawerGrace === GAME_TIMING.drawerGrace, JSON.stringify(t))
+  }
+  check('timings: an empty env is production defaults', JSON.stringify(gameTimings()) === JSON.stringify(GAME_TIMING))
+
+  // Clamping keeps a typo from freezing a game or creating a zero phase.
+  const clamped = gameTimings({ ENVIRONMENT: 'dev', GAME_PICK_MS: '0', GAME_ROUND_MS: '999999999', GAME_REVEAL_MS: 'not-a-number' })
+  check('timings: out-of-range and junk values fall back to the default',
+    clamped.pick === GAME_TIMING.pick && clamped.drawing === GAME_TIMING.drawing && clamped.reveal === GAME_TIMING.reveal,
+    JSON.stringify(clamped))
+  const edge = gameTimings({ ENVIRONMENT: 'dev', GAME_PICK_MS: '500', GAME_ROUND_MS: '3600000' })
+  check('timings: the clamp boundaries themselves are accepted',
+    edge.pick === 500 && edge.drawing === 3600000, JSON.stringify(edge))
+}
+
+// ---- table shape for N = 2..12 (design guard, not a product limit) ----------
+{
+  // R = N x T with T = ceil(6/N): R is 6 for N<=6, then grows with N. This is
+  // the deliberate "everyone draws at least once" shape; the durations/alarm
+  // counts are projections at production timings, printed in the step summary.
+  const expected = { 2: 6, 3: 6, 4: 8, 5: 10, 6: 6, 7: 7, 8: 8, 9: 9, 10: 10, 11: 11, 12: 12 }
+  for (const [n, rounds] of Object.entries(expected)) {
+    const r = rotation(Number(n))
+    check(`table: N=${n} plays ${rounds} rounds`, r.rounds === rounds, JSON.stringify(r))
+    check(`table: N=${n} divides evenly`, r.rounds % Number(n) === 0)
+  }
+  check('table: the design has no player cap of 6', rotation(12).rounds === 12)
 }
 
 summary('game-unit')

@@ -563,6 +563,16 @@ export class Room {
       ws.serializeAttachment(att)
     }
 
+    // Only the current drawer may paint, and only during the drawing phase.
+    // The message has already been billed and counted against the per-type
+    // budget above, so a non-drawer flood still closes 1008 — we just never
+    // relay or store it. Silently ignored (no violation): a phase flip can
+    // race a legitimate in-flight frame, and that must not close a good socket.
+    if (STROKE_TYPES.includes(env.t) && !this.mayDraw(room, att)) {
+      logEvent('stroke_ignored', { t: env.t, phase: room.game.phase })
+      return
+    }
+
     if (env.t === 'kick') {
       await this.handleKick(room, att, p, ws)
       return
@@ -621,6 +631,23 @@ export class Room {
 
   isConnected(userId) {
     return !!userId && this.socketsFor(userId).some((ws) => ws.readyState === OPEN)
+  }
+
+  /** True only for the current drawer while the round is in its drawing phase. */
+  mayDraw(room, att) {
+    return room.game.phase === 'drawing' && !!att.userId && att.userId === room.game.drawerUserId
+  }
+
+  /**
+   * A seat is "held" while a disconnected player may still reconnect to it
+   * (`heldUntil` set). A released seat (kicked, or the hold expired) is gone.
+   * The drawer grace only makes sense for a held seat: a released drawer
+   * cannot come back, so their round is skipped at the next alarm, not after
+   * a 10 s wait.
+   */
+  drawerSeatHeld(room, userId) {
+    const seat = userId ? room.seats[userId] : null
+    return !!seat && !!seat.heldUntil
   }
 
   connectedSocket(userId) {
@@ -683,9 +710,10 @@ export class Room {
   }
 
   /**
-   * One alarm step for the game. Drawer grace wins over the phase deadline so
-   * a vanished drawer never stalls a round. Hints are catch-up steps inside
-   * drawing; every other transition is one step.
+   * One alarm step for the game. A vanished drawer never stalls a round:
+   * if their seat is held they get `drawerGrace` to reconnect, and if the
+   * seat is already released the round is skipped at the next alarm. Hints
+   * are catch-up steps inside drawing; every other transition is one step.
    */
   async gameTick(room, now) {
     const game = room.game
@@ -697,15 +725,23 @@ export class Room {
       return
     }
 
-    if (game.drawerGraceAt && now >= game.drawerGraceAt) {
-      game.drawerGraceAt = 0
-      if (!this.isConnected(game.drawerUserId) && isDrawerPhase(game.phase)) {
+    // Drawer absent, and either their seat is released (kicked, or the hold
+    // expired: they cannot return) or an in-progress grace has run out: skip
+    // the round now. A held seat still inside its grace keeps waiting; a
+    // drawer who was never connected falls through to the deadline below, so
+    // an expired pick still auto-picks and an expired drawing still reveals.
+    if (isDrawerPhase(game.phase) && !this.isConnected(game.drawerUserId)) {
+      const released = !this.drawerSeatHeld(room, game.drawerUserId)
+      const graceOver = !!game.drawerGraceAt && now >= game.drawerGraceAt
+      if (released || graceOver) {
+        game.drawerGraceAt = 0
         const from = game.phase
         skipRound(game, now, times)
         await this.afterGameStep(room, { from, to: game.phase, event: 'drawer_absent' }, times)
         return
       }
     }
+    if (game.drawerGraceAt && now >= game.drawerGraceAt) game.drawerGraceAt = 0
 
     if (!game.deadlineAt || now < game.deadlineAt) return
 
@@ -722,9 +758,10 @@ export class Room {
     const game = room.game
     const now = Date.now()
     // A player who is in the order but not connected still gets a fresh grace
-    // window when their turn starts; if they do not return, the round is
-    // skipped with an empty reveal instead of waiting out the whole phase.
-    if (res.to === 'pick' && !this.isConnected(game.drawerUserId)) {
+    // window when their turn starts — but only if their seat is held, i.e.
+    // they may still reconnect. A released seat cannot come back, so the
+    // gameTick below skips that round at the very next alarm.
+    if (res.to === 'pick' && !this.isConnected(game.drawerUserId) && this.drawerSeatHeld(room, game.drawerUserId)) {
       game.drawerGraceAt = now + times.drawerGrace
     }
     await this.saveSafe(room)
@@ -861,11 +898,8 @@ export class Room {
     }
     room.blocked[target] = true
     delete room.seats[target] // released immediately: they cannot return
-    // A kicked drawer gets the same grace path as a disconnect; they cannot
-    // reconnect, so the round is skipped when it expires.
-    if (isDrawerPhase(room.game.phase) && room.game.drawerUserId === target) {
-      room.game.drawerGraceAt = Date.now() + gameTimings(this.env).drawerGrace
-    }
+    // A kicked drawer's seat is released, not held: gameTick skips their
+    // round at the next alarm instead of waiting out a reconnect grace.
     const wasHost = target === room.hostUserId
     const hostChanged = wasHost ? await this.promoteHost(room) : false
     await this.saveSafe(room)
