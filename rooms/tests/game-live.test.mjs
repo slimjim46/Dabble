@@ -292,36 +292,38 @@ const closeAll = async (conns) => {
   const { users, conns } = await roomWith(2)
   const [host, peer] = conns
   host.ws.send(start)
-  await host.waitFor((m) => m.t === 'state' && m.phase === 'pick' && m.round === 1, 8000)
-  await host.waitFor((m) => m.t === 'word_pick' && m.round === 1, 5000)
+  const firstPick = await host.waitFor((m) => m.t === 'state' && m.phase === 'pick' && m.round === 1, 8000)
+  const drawer = firstPick?.drawer === users[0].userId ? host : peer
+  const helper = drawer === host ? peer : host
+  await drawer.waitFor((m) => m.t === 'word_pick' && m.round === 1, 5000)
 
   // During pick nobody may paint.
-  const beforePick = peer.json().length
-  host.ws.send(strokeFrames('p', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa').start)
+  const beforePick = helper.json().length
+  drawer.ws.send(strokeFrames('p', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa').start)
   await sleep(300)
   check('F: a stroke during pick is ignored',
-    !peer.json().slice(beforePick).some((m) => m.t === 'stroke_start'))
+    !helper.json().slice(beforePick).some((m) => m.t === 'stroke_start'))
 
-  host.ws.send(pick(0))
-  await host.waitFor((m) => m.t === 'state' && m.phase === 'drawing' && m.round === 1, 5000)
+  drawer.ws.send(pick(0))
+  await drawer.waitFor((m) => m.t === 'state' && m.phase === 'drawing' && m.round === 1, 5000)
 
   // The non-drawer paints: ignored.
-  const before = peer.json().length
-  peer.ws.send(strokeFrames('n', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb').start)
-  peer.ws.send(strokeFrames('n', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb').end)
+  const before = helper.json().length
+  helper.ws.send(strokeFrames('n', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb').start)
+  helper.ws.send(strokeFrames('n', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb').end)
   await sleep(400)
   check('F: a non-drawer stroke is never relayed',
-    !peer.json().slice(before).some((m) => m.t === 'stroke_start' || m.t === 'stroke_end'))
-  check('F: the non-drawer stays connected (ignored, not punished)', !peer.closed)
+    !helper.json().slice(before).some((m) => m.t === 'stroke_start' || m.t === 'stroke_end'))
+  check('F: the non-drawer stays connected (ignored, not punished)', !helper.closed)
 
-  // The drawer paints: relayed to the peer.
-  peer.messages.length = 0
+  // The drawer paints: relayed to the other side.
+  helper.messages.length = 0
   const f = strokeFrames('d', 'cccccccc-cccc-4ccc-8ccc-cccccccccccc')
-  host.ws.send(f.start)
-  host.ws.send(f.points)
-  host.ws.send(f.end)
-  const relayed = await peer.waitFor((m) => m.t === 'stroke_end', 4000)
-  check('F: the drawer\'s stroke is relayed', !!relayed, JSON.stringify(peer.json().slice(-3)))
+  drawer.ws.send(f.start)
+  drawer.ws.send(f.points)
+  drawer.ws.send(f.end)
+  const relayed = await helper.waitFor((m) => m.t === 'stroke_end', 4000)
+  check('F: the drawer\'s stroke is relayed', !!relayed, JSON.stringify(helper.json().slice(-3)))
 
   await host.close()
   await peer.close()

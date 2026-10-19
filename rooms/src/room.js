@@ -550,6 +550,19 @@ export class Room {
       return
     }
 
+    // Only the current drawer may paint, and only during the drawing phase.
+    // Checked BEFORE stroke ownership so an ignored frame can never claim or
+    // corrupt the connection's open-stroke slot. The message has already been
+    // billed and counted against the per-type budget above, so a non-drawer
+    // flood still closes 1008 — we just never relay or store it. Silently
+    // ignored (no violation): a phase flip can race a legitimate in-flight
+    // frame, and that must not close a good socket.
+    if (STROKE_TYPES.includes(env.t) && !this.mayDraw(room, att)) {
+      ws.serializeAttachment(att) // keep the decremented budget bucket
+      logEvent('stroke_ignored', { t: env.t, phase: room.game.phase })
+      return
+    }
+
     // Stroke ownership (one open stroke per connection, started here only).
     if (STROKE_TYPES.includes(env.t)) {
       const owned = this.checkOwnership(att, env.t, p)
@@ -561,16 +574,6 @@ export class Room {
       ws.serializeAttachment(att)
     } else {
       ws.serializeAttachment(att)
-    }
-
-    // Only the current drawer may paint, and only during the drawing phase.
-    // The message has already been billed and counted against the per-type
-    // budget above, so a non-drawer flood still closes 1008 — we just never
-    // relay or store it. Silently ignored (no violation): a phase flip can
-    // race a legitimate in-flight frame, and that must not close a good socket.
-    if (STROKE_TYPES.includes(env.t) && !this.mayDraw(room, att)) {
-      logEvent('stroke_ignored', { t: env.t, phase: room.game.phase })
-      return
     }
 
     if (env.t === 'kick') {
@@ -635,6 +638,10 @@ export class Room {
 
   /** True only for the current drawer while the round is in its drawing phase. */
   mayDraw(room, att) {
+    // No game running: the room is a free-draw canvas (the plaza stays the
+    // lobby), so any connected member may paint.
+    if (room.game.phase === 'lobby') return true
+    // During a game only the current drawer may paint, and only while drawing.
     return room.game.phase === 'drawing' && !!att.userId && att.userId === room.game.drawerUserId
   }
 
@@ -898,8 +905,12 @@ export class Room {
     }
     room.blocked[target] = true
     delete room.seats[target] // released immediately: they cannot return
-    // A kicked drawer's seat is released, not held: gameTick skips their
-    // round at the next alarm instead of waiting out a reconnect grace.
+    // A kicked drawer's seat is released, so gameTick skips their round right
+    // away; schedule an immediate alarm (drawerGraceAt = now) so it does not
+    // wait for the phase deadline.
+    if (isDrawerPhase(room.game.phase) && room.game.drawerUserId === target) {
+      room.game.drawerGraceAt = Date.now()
+    }
     const wasHost = target === room.hostUserId
     const hostChanged = wasHost ? await this.promoteHost(room) : false
     await this.saveSafe(room)
