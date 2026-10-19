@@ -16,7 +16,7 @@ import path from 'node:path'
 
 import { PAPER_SIZE as SERVER_PAPER_SIZE } from '../rooms/src/config.js'
 import * as serverConfig from '../rooms/src/config.js'
-import { CLIENT_TYPES, parseEnvelope } from '../rooms/src/wire.js'
+import { CLIENT_TYPES, buildSnapshot, parseEnvelope } from '../rooms/src/wire.js'
 import { MAX_NAME_LENGTH, PAPER_SIZE } from '../src/lib/constants.js'
 import { roomsEntryHref } from '../src/lib/roomsEntry.js'
 import { BRUSH_IDS, PALETTE, DEFAULT_COLOR, colorForKey } from '../src/lib/palette.js'
@@ -26,6 +26,9 @@ import { ROOM_ERROR_COPY, RETRYABLE_ERRORS, TRANSPORT_ONLY_ERRORS } from '../src
 import {
   FATAL_CLOSE_CODES,
   MAX_RECONNECT_ATTEMPTS,
+  MAX_ROUND_BYTES,
+  MAX_ROUND_POINTS,
+  MAX_ROUND_STROKES,
   ROOM_CODE_RE,
   ROOM_CURSOR_FLUSH_MS,
   ROOM_POINT_FLUSH_MS,
@@ -141,6 +144,22 @@ for (const [type, message] of outbound) {
   )
 }
 
+{
+  // The other direction of the mirror: a snapshot the server builds must pass
+  // the client's own SERVER_TYPES parser (the client never sends snapshot).
+  const built = buildSnapshot(1, false, [
+    { id: UUID, userId: UUID2, userName: 'A', color: '#E5484D', width: 5, b: 0, points: [1, 2, 3, 4] },
+    { id: UUID2, userId: UUID2, userName: 'B', color: '#123456', width: 5, b: 0, points: [1, 2] },
+  ])
+  const parsed = parseRoomMessage(JSON.stringify(built))
+  check('contract: the server-built snapshot parses on the client',
+    parsed?.type === 'snapshot' && parsed.data.round === 1 && parsed.data.partial === false,
+    JSON.stringify(parsed))
+  check('contract: the client canonicalises the snapshot stroke colour',
+    parsed?.data?.strokes?.length === 1 && parsed.data.strokes[0].color === '#e5484d',
+    JSON.stringify(parsed?.data?.strokes))
+}
+
 // ===========================================================================
 // 2. Palette drift: src/lib/palette.js <-> rooms/src/config.js <-> Toolbar.jsx
 // ===========================================================================
@@ -186,6 +205,9 @@ for (const [type, message] of outbound) {
     ['MAX_KEY_LENGTH', CLIENT_MAX_KEY_LENGTH, serverConfig.MAX_KEY_LENGTH],
     ['MAX_NAME_LENGTH', MAX_NAME_LENGTH, serverConfig.MAX_NAME_LENGTH],
     ['PAPER_SIZE', PAPER_SIZE, SERVER_PAPER_SIZE],
+    ['MAX_ROUND_STROKES', MAX_ROUND_STROKES, serverConfig.MAX_ROUND_STROKES],
+    ['MAX_ROUND_POINTS', MAX_ROUND_POINTS, serverConfig.MAX_ROUND_POINTS],
+    ['MAX_ROUND_BYTES', MAX_ROUND_BYTES, serverConfig.MAX_ROUND_BYTES],
   ]
   for (const [label, a, b] of pairs) {
     check(`constants: ${label} matches the server`, a === b, `client=${a} server=${b}`)
@@ -341,6 +363,15 @@ for (const [type, message] of outbound) {
     ['stroke_end with an empty point list', json({ v: 1, t: 'stroke_end', k: 'k', stroke: { id: UUID, userId: UUID2, userName: 'A', color: '#e5484d', width: 4, points: [] } })],
     ['kick with a non-uuid target', json({ v: 1, t: 'kick', userId: 'admin' })],
     ['welcome with a seat past MAX_PLAYERS', json({ v: 1, t: 'welcome', seat: 999, host: false, players: [] })],
+    ['cursor with a non-string userId', json({ ...good, userId: 42 })],
+    ['snapshot with a fractional round', json({ v: 1, t: 'snapshot', round: 1.5, partial: false, strokes: [] })],
+    ['snapshot with a negative round', json({ v: 1, t: 'snapshot', round: -1, partial: false, strokes: [] })],
+    ['snapshot with a non-boolean partial', json({ v: 1, t: 'snapshot', round: 1, partial: 'yes', strokes: [] })],
+    ['snapshot with strokes that are not an array', json({ v: 1, t: 'snapshot', round: 1, partial: false, strokes: {} })],
+    ['snapshot with more than MAX_ROUND_STROKES strokes', json({
+      v: 1, t: 'snapshot', round: 1, partial: false,
+      strokes: new Array(serverConfig.MAX_ROUND_STROKES + 1).fill({ id: UUID, userId: UUID2, userName: 'A', color: '#e5484d', width: 4, points: [1, 1, 2, 2] }),
+    })],
   ]
   for (const [label, text] of inboundCases) {
     let out
@@ -379,6 +410,35 @@ for (const [type, message] of outbound) {
   check('inbound: blank names become Guest and bad countries become null',
     !!named && named.data.players[0].name === 'Guest' && named.data.players[0].country === null,
     JSON.stringify(named?.data?.players))
+
+  // A snapshot drops the strokes that fail the validator and keeps the rest —
+  // the same rule as players in welcome, so one bad entry never blanks paper.
+  const mixed = parseRoomMessage(json({
+    v: 1, t: 'snapshot', round: 2, partial: true,
+    strokes: [
+      { id: UUID, userId: UUID2, userName: 'A', color: '#e5484d', width: 4, points: [1, 1, 2, 2] },
+      { id: 'not-a-uuid', userId: UUID2, userName: 'A', color: '#e5484d', width: 4, points: [1, 1, 2, 2] },
+      { id: UUID2, userId: UUID2, userName: 'A', color: '#123456', width: 4, points: [1, 1, 2, 2] },
+      { id: UUID, userId: UUID2, userName: 'A', color: '#e5484d', width: 4, points: [1, 1, 1] },
+    ],
+  }))
+  check('inbound: snapshot drops invalid strokes and keeps valid ones',
+    mixed?.data?.strokes?.length === 1 && mixed.data.strokes[0].id === UUID &&
+    mixed.data.round === 2 && mixed.data.partial === true,
+    JSON.stringify(mixed?.data))
+
+  const canonical = parseRoomMessage(json({
+    v: 1, t: 'snapshot', round: 0, partial: false,
+    strokes: [{ id: UUID, userId: UUID2, userName: 'A', color: '#E5484D', width: 4, points: [1, 1, 2, 2] }],
+  }))
+  check('inbound: snapshot strokes canonicalise like stroke_end (colour + brush)',
+    canonical?.data?.strokes?.[0]?.color === '#e5484d' && canonical.data.strokes[0].b === 0,
+    JSON.stringify(canonical?.data?.strokes?.[0]))
+
+  // A server predating v2 Phase 3 sends cursors without a userId.
+  const legacyCursor = parseRoomMessage(json({ v: 1, t: 'cursor', k: 'k1', x: 5, y: 6 }))
+  check('inbound: a cursor without userId still parses (older server)',
+    legacyCursor?.data?.x === 5 && legacyCursor?.data?.y === 6, JSON.stringify(legacyCursor))
 }
 
 // ===========================================================================
@@ -661,6 +721,17 @@ function sourceCode(rel) {
   check('transport: never puts the token in the URL',
     !/ws\?.*token/i.test(transport) && !transport.includes('${token}'))
   check('transport: never logs the token', !transport.includes('console.log'))
+  check('transport: applies the snapshot frame', transport.includes("case 'snapshot'"))
+  check('transport: applies snapshots by diff, never a wholesale replace',
+    !transport.includes('replaceAll'))
+
+  // The round (and later the secret word) lives server-side only: nothing the
+  // room client learns may be written to browser storage.
+  const storageOffenders = readdirSync(path.join(root, 'src', 'rooms'))
+    .filter((f) => /\.(js|jsx)$/.test(f))
+    .filter((f) => readSource(`src/rooms/${f}`).includes('localStorage'))
+  check('src/rooms: never touches localStorage', storageOffenders.length === 0,
+    JSON.stringify(storageOffenders))
 
   const home = sourceCode('src/rooms/RoomsHome.jsx')
   check('rooms home: validates the code before navigating', home.includes('ROOM_CODE_RE.test'))

@@ -15,17 +15,20 @@ import {
   CLOSE_TOO_BIG,
   KICK_CLOSE,
   MAX_PLAYERS,
-  MAX_ROOM_LIFETIME_MS,
   MAX_MSG_BYTES,
+  MAX_ROOM_LIFETIME_MS,
+  MAX_ROUND_STROKES,
   MAX_VIOLATIONS,
   RATE_BUDGET,
   ROOM_GRACE_MS,
+  ROUND_KEY_PREFIX,
   SEAT_HOLD_MS,
   ipCapAllows,
   maxIpSockets,
 } from './config.js'
 import { logEvent } from './log.js'
-import { CLIENT_TYPES, STROKE_TYPES, parseEnvelope } from './wire.js'
+import { buildSnapshot, CLIENT_TYPES, STROKE_TYPES, parseEnvelope } from './wire.js'
+import { countRoundPoints, newRoundState, recordRoundStroke, roundFits, roundKey } from './round.js'
 
 const OPEN = 1 // WebSocket.OPEN
 
@@ -74,6 +77,9 @@ export class Room {
   async load() {
     if (this.room === null) {
       this.room = (await this.state.storage.get('room')) || null
+      // Rooms created before v2 Phase 3 have no round state; backfill it in
+      // memory (the next save() persists it, and every stroke save does).
+      if (this.room && !this.room.game) this.room.game = newRoundState(1)
     }
     return this.room
   }
@@ -256,6 +262,7 @@ export class Room {
         seats: {},
         blocked: {},
         lastEmptyAt: now, // an unjoined room dies with the empty-room grace
+        game: newRoundState(1),
       }
       await this.save()
       await this.rearm()
@@ -368,6 +375,10 @@ export class Room {
         players,
       })
     )
+    // Exactly one rule for canvas state: every join, even the first, gets a
+    // snapshot of the current round (usually empty). Sent before the
+    // presence broadcast, so the order on the wire is welcome -> snapshot.
+    server.send(JSON.stringify(await this.snapshotFrame(room)))
     this.presence(room, 'join', userId, seat) // others; new socket has welcome
     logEvent('join', { seat, host: userId === room.hostUserId, jwtLike: !!jwtLike, swp: hasProtoHeader ? 1 : 0 })
     return new Response(null, { status: 101, webSocket: client, headers: acceptHeaders })
@@ -504,15 +515,13 @@ export class Room {
     }
     if (env.t === 'stroke_end') {
       const s = p.stroke
-      this.broadcast(
-        {
-          v: 1,
-          t: 'stroke_end',
-          k: p.k,
-          stroke: { id: s.id, userId: att.userId, userName: att.name, color: s.color, width: s.width, b: s.b, points: s.points },
-        },
-        ws
-      )
+      const stroke = { id: s.id, userId: att.userId, userName: att.name, color: s.color, width: s.width, b: s.b, points: s.points }
+      // Store BEFORE broadcasting: a client that saw the live frame is then
+      // guaranteed the snapshot has it too (no race where a join in between
+      // gets a snapshot missing the stroke it never saw live). A storage
+      // failure never stops the live relay — it only flags the round partial.
+      await this.storeRoundStroke(room, stroke)
+      this.broadcast({ v: 1, t: 'stroke_end', k: p.k, stroke }, ws)
       return
     }
     if (env.t === 'stroke_cancel') {
@@ -520,9 +529,68 @@ export class Room {
       return
     }
     if (env.t === 'cursor') {
-      this.broadcast({ v: 1, t: 'cursor', k: p.k, x: p.x, y: p.y }, ws)
+      this.broadcast({ v: 1, t: 'cursor', k: p.k, x: p.x, y: p.y, userId: att.userId }, ws)
       return
     }
+  }
+
+  // ---- Round storage (rs: keys + snapshot) ---------------------------------
+
+  /**
+   * Persist one completed stroke under its round key, respecting the round
+   * caps. Returns true if it was stored. The fit check and the seq bump are
+   * synchronous (no await between them), so two strokes ending on different
+   * sockets can never take the same key. On breach (or a storage failure) the
+   * round becomes partial: live drawing continues, nothing more is stored, and
+   * snapshots carry partial: true so the client knows it may be incomplete.
+   */
+  async storeRoundStroke(room, stroke) {
+    const state = room.game
+    const text = JSON.stringify(stroke)
+    const bytes = new TextEncoder().encode(text).length
+    const points = countRoundPoints(stroke.points)
+
+    if (!roundFits(state, bytes, points)) {
+      if (!state.partial) {
+        state.partial = true
+        logEvent('round_storage_full', { count: state.count, bytes: state.bytes })
+        try {
+          await this.save()
+        } catch {
+          logEvent('room_save_failed')
+        }
+      }
+      return false
+    }
+
+    recordRoundStroke(state, bytes, points) // sync: claims the seq before any await
+    try {
+      await this.state.storage.put(roundKey(state.seq), stroke)
+    } catch {
+      state.partial = true
+      logEvent('round_store_failed')
+      return false
+    }
+    try {
+      await this.save()
+    } catch {
+      logEvent('room_save_failed')
+    }
+    return true
+  }
+
+  /** The current round as a snapshot frame. list() keys are zero-padded, so
+   *  they arrive in paint order; the sort is a cheap defence against a future
+   *  key format that would not. */
+  async snapshotFrame(room) {
+    const listed = await this.state.storage.list({ prefix: ROUND_KEY_PREFIX, limit: MAX_ROUND_STROKES + 1 })
+    const entries = [...listed.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    const stored = entries.map(([, v]) => v)
+    const frame = buildSnapshot(room.game.round, room.game.partial, stored)
+    if (frame.strokes.length !== stored.length) {
+      logEvent('snapshot_dropped_invalid', { dropped: stored.length - frame.strokes.length })
+    }
+    return frame
   }
 
   checkOwnership(att, type, p) {

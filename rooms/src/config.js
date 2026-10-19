@@ -89,6 +89,20 @@ export const PALETTE = Object.freeze([
 // client and the server agree on before the room client hardcodes the format.
 export const BRUSH_IDS = Object.freeze([0])
 
+// ---- Round stroke storage (v2 Phase 3) -------------------------------------
+// One completed stroke per storage key under ROUND_KEY_PREFIX, written once
+// on stroke_end and cleared at every round start. The caps bound the snapshot
+// frame: MAX_MSG_BYTES is an INCOMING cap, so an unbounded round would become
+// one giant outgoing frame. A stroke that would break any cap is simply not
+// stored (the live relay is untouched) and the round is marked partial, so the
+// client knows the snapshot is incomplete. Mirrors roomsConfig.js; asserted
+// equal in tests/roomClient.test.mjs.
+export const ROUND_KEY_PREFIX = 'rs:'
+export const ROUND_SEQ_PAD = 6 // zero-padded so list() returns paint order
+export const MAX_ROUND_STROKES = 500 // ~10x a 60 s round's strokes
+export const MAX_ROUND_POINTS = 20000 // x/y pairs (~256 KB at ~12 B per point)
+export const MAX_ROUND_BYTES = 256 * 1024 // one snapshot stays a sane frame
+
 // ---- Per-IP socket cap (pure helpers, unit-tested in Node) ----------------
 // Effective cap: env override (dev load test) or the default above.
 export function maxIpSockets(env = {}) {

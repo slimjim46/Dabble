@@ -138,3 +138,22 @@ export const CLIENT_TYPES = Object.freeze({
 
 // Types governed by a strict "one open stroke per connection" ownership rule.
 export const STROKE_TYPES = Object.freeze(['stroke_start', 'stroke_points', 'stroke_end', 'stroke_cancel'])
+
+// ---- server -> client builders ----------------------------------------------
+
+/**
+ * The authoritative content of the current round. Each stroke is exactly the
+ * stroke_end.stroke shape, so the client reuses its existing stroke validator
+ * and decodePoints — no new codec. Stored strokes were validated on the way
+ * in, but storage is re-checked on the way out: anything that fails the shape
+ * validator (corruption, a future writer) is dropped rather than relayed, and
+ * the caller compares lengths to log the drop.
+ */
+export function buildSnapshot(round, partial, strokes) {
+  const clean = []
+  for (const s of strokes) {
+    if (!isValidStrokeShape(s)) continue
+    clean.push({ ...s, color: isPalette(s.color), b: brushOf(s) })
+  }
+  return { v: WIRE_VERSION, t: 'snapshot', round, partial, strokes: clean }
+}

@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { BRUSH_IDS, PALETTE } from '../src/config.js'
-import { parseStrokeEnd, parseStrokeStart } from '../src/wire.js'
+import { buildSnapshot, parseStrokeEnd, parseStrokeStart } from '../src/wire.js'
 import { check, summary } from './helpers.mjs'
 
 const here = path.dirname(fileURLToPath(import.meta.url))
@@ -95,5 +95,41 @@ check('final stroke: brush id 1 rejected', parseStrokeEnd(end({ b: 1 })) === nul
 check('final stroke: colour canonicalised', ended({ color: '#E5484D' })?.color === '#e5484d')
 check('final stroke: colour not in palette rejected', parseStrokeEnd(end({ color: '#112233' })) === null)
 check('final stroke: missing colour rejected', parseStrokeEnd(end({ color: undefined })) === null)
+
+// ---- snapshot builder (server -> client, v2 Phase 3) --------------------------
+const snapshotStroke = (over = {}) => ({
+  id: UUID,
+  userId: 'u1',
+  userName: 'A',
+  color: '#e5484d',
+  width: 3,
+  points: [1, 1, 2, 2],
+  ...over,
+})
+
+{
+  const frame = buildSnapshot(3, true, [snapshotStroke()])
+  check('snapshot: frame carries v, type, round and partial',
+    frame.v === 1 && frame.t === 'snapshot' && frame.round === 3 && frame.partial === true,
+    JSON.stringify({ v: frame.v, t: frame.t, round: frame.round, partial: frame.partial }))
+  check('snapshot: strokes array passes through', frame.strokes.length === 1, String(frame.strokes.length))
+  check('snapshot: an empty round builds an empty frame',
+    buildSnapshot(1, false, []).strokes.length === 0)
+
+  const canonical = buildSnapshot(1, false, [snapshotStroke({ color: '#E5484D' })]).strokes[0]
+  check('snapshot: stored colour canonicalised like stroke_end', canonical?.color === '#e5484d', canonical?.color)
+  check('snapshot: absent brush id materialises as 0', canonical?.b === 0, String(canonical?.b))
+
+  const filtered = buildSnapshot(1, false, [
+    snapshotStroke(),
+    snapshotStroke({ id: 'not-a-uuid' }),
+    snapshotStroke({ color: '#112233' }),
+    snapshotStroke({ points: [1] }),
+    null,
+  ])
+  check('snapshot: strokes failing the shape validator are dropped, valid ones kept',
+    filtered.strokes.length === 1 && filtered.strokes[0].color === '#e5484d',
+    String(filtered.strokes.length))
+}
 
 summary('wire-unit')

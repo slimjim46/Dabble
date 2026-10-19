@@ -30,6 +30,17 @@ export const MAX_LIVE_BATCH_NUMBERS = 400
 // Mirrors MAX_FINAL_POINT_NUMBERS in rooms/src/config.js / strokeCodec.
 export const MAX_FINAL_POINT_NUMBERS = 8000
 
+// ---- round stroke storage ---------------------------------------------------
+// The server holds the current round's strokes in the Durable Object's own
+// storage and sends them as a `snapshot` on every join. Must equal
+// MAX_ROUND_STROKES / MAX_ROUND_POINTS / MAX_ROUND_BYTES in
+// rooms/src/config.js; tests/roomClient.test.mjs asserts all three.
+// Only the stroke count is enforced client-side (a frame with more strokes is
+// hostile); the byte and point caps are the server's snapshot-size budget.
+export const MAX_ROUND_STROKES = 500
+export const MAX_ROUND_POINTS = 20000
+export const MAX_ROUND_BYTES = 256 * 1024
+
 // ---- reconnect -------------------------------------------------------------
 // A dropped socket is retried with capped exponential backoff; every attempt
 // takes a fresh Supabase session first, because the token may have expired

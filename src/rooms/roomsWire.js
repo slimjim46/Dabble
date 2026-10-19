@@ -13,7 +13,7 @@
 import { MAX_NAME_LENGTH, PAPER_SIZE } from '../lib/constants.js'
 import { BRUSH_IDS, PALETTE } from '../lib/palette.js'
 import { encodePoints, quantize } from '../lib/strokeCodec.js'
-import { MAX_FINAL_POINT_NUMBERS, MAX_LIVE_BATCH_NUMBERS, MAX_PLAYERS, ROOM_CODE_RE } from './roomsConfig.js'
+import { MAX_FINAL_POINT_NUMBERS, MAX_LIVE_BATCH_NUMBERS, MAX_PLAYERS, MAX_ROUND_STROKES, ROOM_CODE_RE } from './roomsConfig.js'
 
 export const WIRE_VERSION = 1
 export const MAX_KEY_LENGTH = 64
@@ -236,7 +236,30 @@ function parseStrokeCancel(p) {
 
 function parseCursor(p) {
   if (!p || !isKey(p.k) || !isCoord(p.x) || !isCoord(p.y)) return null
+  // The server attaches the sender's userId so a cursor gets a name and colour
+  // before the player has drawn anything. Optional: a server predating it
+  // sends nothing, and a bad id invalidates the frame rather than sneaking in.
+  if (p.userId !== undefined && !isKey(p.userId)) return null
   return p
+}
+
+/**
+ * The authoritative content of the current round (server -> client only).
+ * Structural problems reject the whole frame; a single stroke that fails the
+ * existing stroke validator is dropped and the rest kept — the same rule as
+ * players in `welcome`, so one bad entry can never blank the paper.
+ */
+function parseSnapshot(p) {
+  if (!p) return null
+  if (!Number.isInteger(p.round) || p.round < 0) return null
+  if (typeof p.partial !== 'boolean') return null
+  if (!Array.isArray(p.strokes) || p.strokes.length > MAX_ROUND_STROKES) return null
+  const strokes = []
+  for (const raw of p.strokes) {
+    if (!isValidStrokeShape(raw)) continue
+    strokes.push({ ...raw, color: isPalette(raw.color), b: brushOf(raw) })
+  }
+  return { round: p.round, partial: p.partial, strokes }
 }
 
 function parseKickAck(p) {
@@ -257,6 +280,7 @@ const SERVER_TYPES = Object.freeze({
   stroke_end: parseStrokeEnd,
   stroke_cancel: parseStrokeCancel,
   cursor: parseCursor,
+  snapshot: parseSnapshot,
   kick_ack: parseKickAck,
   kick_err: parseKickErr,
 })

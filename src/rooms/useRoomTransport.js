@@ -69,7 +69,7 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
       cursorDirty: false,
       seenKeys: new Set(), // k values we already know the identity of
       keyToUser: new Map(),
-      playerCountry: new Map(),
+      playersById: new Map(), // userId -> player entry from welcome/presence
       pendingAttempt: 1,
       retryTimer: 0,
       waitingForOnline: false,
@@ -90,14 +90,14 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
           setSeat(frame.data.seat)
           setIsHost(frame.data.host)
           setPlayers(frame.data.players)
-          s.playerCountry = new Map(frame.data.players.map((p) => [p.userId, p.country]))
+          s.playersById = new Map(frame.data.players.map((p) => [p.userId, p]))
           break
         }
 
         case 'presence': {
           setPlayers(frame.data.players)
           const { event, userId } = frame.data
-          s.playerCountry = new Map(frame.data.players.map((p) => [p.userId, p.country]))
+          s.playersById = new Map(frame.data.players.map((p) => [p.userId, p]))
           if (event === 'leave' || event === 'part') {
             const key = s.keyToUser.get(userId)
             if (key) {
@@ -123,7 +123,7 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
           if (!started) return
           s.keyToUser.set(p.k, p.userId)
           s.seenKeys.add(p.k)
-          cursors.setInfo(p.k, p.userName, colorForKey(p.userId), s.playerCountry.get(p.userId) ?? null)
+          cursors.setInfo(p.k, p.userName, colorForKey(p.userId), s.playersById.get(p.userId)?.country ?? null)
           cursors.update(p.k, points[0].x, points[0].y)
           break
         }
@@ -155,7 +155,7 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
             p.k,
             p.stroke.userName,
             colorForKey(p.stroke.userId),
-            s.playerCountry.get(p.stroke.userId) ?? null,
+            s.playersById.get(p.stroke.userId)?.country ?? null,
           )
           store.add({
             id: p.stroke.id,
@@ -180,15 +180,44 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
         case 'cursor': {
           const p = frame.data
           if (p.k === s.key) return
-          // The cursor frame carries only the sender's wire key, so a player
-          // who has not drawn yet has no identity on the client. A neutral
-          // colour chip beats inventing a name for them; the label appears
-          // with their first stroke.
+          // The frame carries the sender's userId, so a cursor gets its name
+          // and colour before the player has drawn anything. A player missing
+          // from presence (released seat, late frame) still falls back to the
+          // neutral chip: never invent a name for a wire key.
           if (!s.seenKeys.has(p.k)) {
             s.seenKeys.add(p.k)
-            cursors.setInfo(p.k, '', colorForKey(p.k), null)
+            const player = p.userId ? s.playersById.get(p.userId) : null
+            if (p.userId) s.keyToUser.set(p.k, p.userId)
+            cursors.setInfo(
+              p.k,
+              player?.name ?? '',
+              colorForKey(p.userId ?? p.k),
+              player?.country ?? null,
+            )
           }
           cursors.update(p.k, p.x, p.y)
+          break
+        }
+
+        case 'snapshot': {
+          // The authoritative content of the current round: diff it into the
+          // store (usually zero changes) and drop anything the round no longer
+          // has — a round clear arrives as an empty snapshot, same one rule.
+          const p = frame.data
+          const keep = new Set(p.strokes.map((s2) => s2.id))
+          for (const s2 of [...store.values()]) {
+            if (!keep.has(s2.id)) store.remove(s2.id)
+          }
+          store.addMany(
+            p.strokes.map((s2) => ({
+              id: s2.id,
+              userId: s2.userId,
+              userName: s2.userName,
+              color: s2.color,
+              width: s2.width,
+              points: decodePoints(s2.points),
+            })),
+          )
           break
         }
 

@@ -598,5 +598,185 @@ import {
   await a.close()
 }
 
+// ---- v2 Phase 3 step 1: round storage + snapshot ------------------------------
+// Every join gets the round (even when empty), stored strokes survive
+// disconnects, the open stroke is never stored, caps flag the round partial
+// without stopping the live relay, and cursors carry the sender's userId.
+
+// A. First join: welcome then an empty snapshot, always, in that order.
+{
+  const u = await anonUser()
+  const { body } = await createRoom(u.token)
+  const a = await connect(body.code, u.token)
+  const snap = await a.waitFor((m) => m.t === 'snapshot')
+  check('snapshot: first join always gets one (never skipped)', !!snap)
+  check('snapshot: a fresh room answers with an empty round 1',
+    snap?.round === 1 && snap?.partial === false && snap?.strokes?.length === 0,
+    JSON.stringify(snap))
+  const frames = a.json().map((m) => m.t)
+  check('snapshot: wire order is exactly welcome, then snapshot',
+    frames[0] === 'welcome' && frames[1] === 'snapshot', JSON.stringify(frames.slice(0, 4)))
+  await a.close()
+}
+
+// B. Late join mid-doodle: the committed stroke is there, the open one is not,
+//    and a reconnect still sees it.
+{
+  const artist = await anonUser()
+  const { body } = await createRoom(artist.token)
+  const a = await connect(body.code, artist.token)
+
+  const S1 = '0e0a0000-0000-4000-8000-000000000101'
+  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'k1', id: S1, userId: 'x', userName: 'x', color: '#e5484d', width: 5, pts: [10, 20] }))
+  await sleep(150)
+  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_end', k: 'k1', stroke: { id: S1, userId: 'x', userName: 'x', color: '#e5484d', width: 5, points: [10, 20, 30, 40, 50, 60] } }))
+  await sleep(400) // store + save finish well before the joiner reads
+
+  const S2 = '0e0a0000-0000-4000-8000-000000000102'
+  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'k1', id: S2, userId: 'x', userName: 'x', color: '#30a46c', width: 7, pts: [100, 200] }))
+  await sleep(200)
+
+  const b = await connect(body.code, (await anonUser()).token)
+  const snap = await b.waitFor((m) => m.t === 'snapshot')
+  check('late join: the committed stroke is in the snapshot',
+    snap?.strokes?.length === 1 && snap.strokes[0].id === S1,
+    JSON.stringify(snap?.strokes?.map((s) => s.id)))
+  const s = snap?.strokes?.[0]
+  check('late join: identity and shape survive storage',
+    !!s && s.userId === artist.userId && s.userName === 'Guest' && s.color === '#e5484d' &&
+    s.width === 5 && s.b === 0 && JSON.stringify(s.points) === '[10,20,30,40,50,60]',
+    JSON.stringify(s))
+  check('late join: an open (never ended) stroke is not stored',
+    !!snap && !snap.strokes.some((x) => x.id === S2))
+
+  await a.close()
+  await sleep(900) // seat hold is 5 s on dev: reconnect, do not re-create
+  const again = await connect(body.code, artist.token)
+  const snap2 = await again.waitFor((m) => m.t === 'snapshot')
+  check('reconnect: the round survives the drop with its stroke',
+    snap2?.strokes?.length === 1 && snap2.strokes[0].id === S1,
+    JSON.stringify(snap2?.strokes?.map((x) => x.id)))
+  console.log('measure ' + JSON.stringify({ case: 'snapshot_small', bytes: JSON.stringify(snap2).length, strokes: snap2?.strokes?.length }))
+  await again.close()
+  await b.close()
+}
+
+// C. Paint order survives storage: a late joiner sees strokes as they were drawn.
+{
+  const artist = await anonUser()
+  const { body } = await createRoom(artist.token)
+  const a = await connect(body.code, artist.token)
+  const ids = [
+    '0e0a0000-0000-4000-8000-000000000111',
+    '0e0a0000-0000-4000-8000-000000000112',
+    '0e0a0000-0000-4000-8000-000000000113',
+  ]
+  for (let i = 0; i < ids.length; i++) {
+    a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'p', id: ids[i], userId: 'x', userName: 'x', color: '#e5484d', width: 4, pts: [i, i] }))
+    await sleep(150)
+    a.ws.send(JSON.stringify({ v: 1, t: 'stroke_end', k: 'p', stroke: { id: ids[i], userId: 'x', userName: 'x', color: '#e5484d', width: 4, points: [i, i, i + 1, i + 1] } }))
+    await sleep(350)
+  }
+  const b = await connect(body.code, (await anonUser()).token)
+  const snap = await b.waitFor((m) => m.t === 'snapshot')
+  check('snapshot: paint order equals insertion order',
+    JSON.stringify(snap?.strokes?.map((x) => x.id)) === JSON.stringify(ids),
+    JSON.stringify(snap?.strokes?.map((x) => x.id)))
+  await a.close()
+  await b.close()
+}
+
+// D. Cursors carry the sender's userId so a watcher gets a labelled cursor
+//    before the sender has drawn anything.
+{
+  const artist = await anonUser()
+  const watcher = await anonUser()
+  const { body } = await createRoom(artist.token)
+  const a = await connect(body.code, artist.token)
+  const w = await connect(body.code, watcher.token)
+  w.ws.send(JSON.stringify({ v: 1, t: 'cursor', k: 'cur1', x: 111, y: 222 }))
+  const cur = await a.waitFor((m) => m.t === 'cursor' && m.k === 'cur1')
+  check('cursor: frame carries the sender userId (identity is server-set)',
+    cur?.userId === watcher.userId, JSON.stringify(cur))
+  check('cursor: position fields unchanged', cur?.x === 111 && cur?.y === 222, JSON.stringify(cur))
+  await a.close()
+  await w.close()
+}
+
+// E. Round caps: 650-point strokes from four artists (each message stays under
+//    MAX_MSG_BYTES) fill MAX_ROUND_POINTS after exactly 30 strokes. The rest
+//    still relay live but are not stored, and the next joiner's snapshot says
+//    partial.
+{
+  const host = await anonUser()
+  const { body } = await createRoom(host.token)
+  const artists = []
+  for (let i = 0; i < 4; i++) {
+    const u = await anonUser()
+    artists.push(await connect(body.code, u.token))
+  }
+  const w = await connect(body.code, (await anonUser()).token)
+
+  const big = []
+  for (let j = 0; j < 1300; j++) big.push(j % 100) // 650 points, ~4.8 KB on the wire
+
+  const draw = async (c, a) => {
+    for (let i = 0; i < 8; i++) {
+      const id = `0e0a0000-0000-4000-8000-${'000000000' + a + String(i).padStart(2, '0')}`
+      c.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'big', id, userId: 'x', userName: 'x', color: '#e5484d', width: 4, pts: [1, 1] }))
+      await sleep(150)
+      c.ws.send(JSON.stringify({ v: 1, t: 'stroke_end', k: 'big', stroke: { id, userId: 'x', userName: 'x', color: '#e5484d', width: 4, points: big } }))
+      await sleep(350)
+    }
+  }
+  await Promise.all(artists.map((c, a) => draw(c, a)))
+  await sleep(500) // let the last storage writes settle
+
+  // The relay must keep working after the breach.
+  const sentinel = '0e0a0000-0000-4000-8000-000000000299'
+  artists[0].ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'big', id: sentinel, userId: 'x', userName: 'x', color: '#30a46c', width: 4, pts: [5, 5] }))
+  await sleep(150)
+  artists[0].ws.send(JSON.stringify({ v: 1, t: 'stroke_end', k: 'big', stroke: { id: sentinel, userId: 'x', userName: 'x', color: '#30a46c', width: 4, points: [5, 5, 6, 6] } }))
+  const relayed = await w.waitFor((m) => m.t === 'stroke_end' && m.stroke?.id === sentinel)
+  check('caps: a breach never stops the live relay (post-breach stroke broadcast)', !!relayed)
+  const seenEnds = w.json().filter((m) => m.t === 'stroke_end').length
+  check('caps: every stroke still reached the live watcher', seenEnds === 33, String(seenEnds))
+
+  const late = await connect(body.code, (await anonUser()).token)
+  const snap = await late.waitFor((m) => m.t === 'snapshot')
+  check('caps: the round is flagged partial once the cap breaks',
+    snap?.partial === true, JSON.stringify({ partial: snap?.partial, n: snap?.strokes?.length }))
+  check('caps: exactly the 30 strokes that fit MAX_ROUND_POINTS are stored',
+    snap?.strokes?.length === 30, String(snap?.strokes?.length))
+  console.log('measure ' + JSON.stringify({ case: 'snapshot_at_cap', bytes: JSON.stringify(snap).length, strokes: snap?.strokes?.length, partial: snap?.partial }))
+  for (const c of artists) await c.close()
+  await w.close()
+  await late.close()
+}
+
+// F. Size of a typical short round: 10 strokes x 400 points, measured from
+//    the frame a real joiner receives.
+{
+  const artist = await anonUser()
+  const { body } = await createRoom(artist.token)
+  const a = await connect(body.code, artist.token)
+  for (let i = 0; i < 10; i++) {
+    const id = `0e0a0000-0000-4000-8000-0000000003${String(i).padStart(2, '0')}`
+    const pts = []
+    for (let j = 0; j < 400; j++) pts.push((j * 7 + i) % 2000, (j * 13 + i) % 2000)
+    a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'm', id, userId: 'x', userName: 'x', color: '#e5484d', width: 4, pts: [pts[0], pts[1]] }))
+    await sleep(150)
+    a.ws.send(JSON.stringify({ v: 1, t: 'stroke_end', k: 'm', stroke: { id, userId: 'x', userName: 'x', color: '#e5484d', width: 4, points: pts } }))
+    await sleep(350)
+  }
+  const b = await connect(body.code, (await anonUser()).token)
+  const snap = await b.waitFor((m) => m.t === 'snapshot')
+  check('typical round: 10 strokes delivered to a late joiner',
+    snap?.strokes?.length === 10, String(snap?.strokes?.length))
+  console.log('measure ' + JSON.stringify({ case: 'snapshot_typical', bytes: JSON.stringify(snap).length, strokes: snap?.strokes?.length, points: 4000 }))
+  await a.close()
+  await b.close()
+}
+
 summary('rooms')
 
