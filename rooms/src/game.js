@@ -5,7 +5,15 @@
 //
 // Phases: lobby -> pick -> drawing -> reveal -> scores -> (pick | game_over)
 //         -> lobby. game in progress is the only state that holds a secret.
-import { HINT_FRACTIONS, PHASES, TARGET_ROUNDS } from './config.js'
+import {
+  CLOSE_DISTANCE_FAR,
+  CLOSE_DISTANCE_NEAR,
+  CLOSE_MAX_LENGTH_FOR_DISTANCE_1,
+  HINT_FRACTIONS,
+  MIN_CLOSE_LENGTH,
+  PHASES,
+  TARGET_ROUNDS,
+} from './config.js'
 import { newRoundState, resetRoundState } from './round.js'
 
 export function newGameState() {
@@ -22,6 +30,7 @@ export function newGameState() {
     hintAts: [],
     correct: [],
     scores: {},
+    guessCount: {}, // userId -> accepted guesses this round (per-user cap)
     skipped: false,
     phaseStartedAt: 0,
     phaseEndsAt: 0,
@@ -46,6 +55,7 @@ export function upgradeGameState(existing) {
   if (!Array.isArray(game.hintAts)) game.hintAts = []
   if (!Array.isArray(game.correct)) game.correct = []
   if (!game.scores || typeof game.scores !== 'object' || Array.isArray(game.scores)) game.scores = {}
+  if (!game.guessCount || typeof game.guessCount !== 'object' || Array.isArray(game.guessCount)) game.guessCount = {}
   return game
 }
 
@@ -79,6 +89,7 @@ function beginPick(game, round, now, times, options) {
   game.hintStep = 0
   game.hintAts = []
   game.correct = []
+  game.guessCount = {}
   game.skipped = false
   game.phaseStartedAt = now
   game.phaseEndsAt = now + times.pick
@@ -223,6 +234,7 @@ export function toLobby(game) {
   game.hintAts = []
   game.correct = []
   game.scores = {}
+  game.guessCount = {}
   game.skipped = false
   game.phaseStartedAt = 0
   game.phaseEndsAt = 0
@@ -316,4 +328,81 @@ export function targetedSecretsAllowed(obj) {
   if (!obj || typeof obj !== 'object') return false
   if (obj.t === 'word_pick' || obj.t === 'your_word') return true
   return secretsAllowed(obj)
+}
+
+// ---- Guessing (v2 Phase 3 step 4a) -----------------------------------------
+// Pure helpers: normalise, compare, and score one guess. No I/O. The guess
+// text is used here and then discarded by the caller — never stored.
+
+const ZERO_WIDTH_RE = /[\u200b-\u200f\u2028\u2029\ufeff]/g
+const CONTROL_RE = /[\u0000-\u001f\u007f-\u009f]/g
+const EDGE_PUNCT_RE = /^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu
+const SPACE_HYPHEN_RE = /[\s-]+/g
+
+/**
+ * Canonical form of a guess or a word: NFKC, lowercase, accents stripped,
+ * zero-width and control characters removed, whitespace collapsed, and leading
+ * and trailing punctuation removed. Returns '' when nothing meaningful is left
+ * (the caller treats that as an ignored guess, not an error).
+ */
+export function normaliseGuess(text) {
+  if (typeof text !== 'string') return ''
+  let s = text.normalize('NFKC').toLowerCase()
+  s = s.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+  s = s.replace(ZERO_WIDTH_RE, '').replace(CONTROL_RE, '')
+  s = s.replace(SPACE_HYPHEN_RE, ' ')
+  s = s.replace(EDGE_PUNCT_RE, '')
+  return s.trim()
+}
+
+/**
+ * The form compared for equality and distance: spaces and hyphens removed, so
+ * "ice cream", "ice-cream" and "icecream" all match each other.
+ */
+function comparable(normalised) {
+  return normalised.replace(/[\s-]/g, '')
+}
+
+/** Levenshtein distance, two rolling rows. */
+function editDistance(a, b) {
+  if (a === b) return 0
+  if (a.length === 0) return b.length
+  if (b.length === 0) return a.length
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i)
+  let curr = new Array(b.length + 1)
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost)
+    }
+    const swap = prev
+    prev = curr
+    curr = swap
+  }
+  return prev[b.length]
+}
+
+/** The distance that still counts as "close!" for a comparable of this length. */
+export function closeDistanceFor(length) {
+  if (length < MIN_CLOSE_LENGTH) return 0 // never close under 3 characters
+  return length <= CLOSE_MAX_LENGTH_FOR_DISTANCE_1 ? CLOSE_DISTANCE_NEAR : CLOSE_DISTANCE_FAR
+}
+
+/**
+ * Judge one guess against the round's word.
+ *   { status: 'correct' | 'close' | 'wrong' } — an empty normalised guess is the
+ * caller's problem (it is ignored before reaching here).
+ */
+export function judgeGuess(word, text) {
+  const target = comparable(normaliseGuess(word))
+  const guess = comparable(normaliseGuess(text))
+  if (guess.length === 0) return { status: 'wrong' }
+  if (guess === target) return { status: 'correct' }
+  // The distance threshold follows the WORD's length (1 up to 7, else 2), but
+  // a guess under 3 characters is never close regardless of the word.
+  if (guess.length < MIN_CLOSE_LENGTH) return { status: 'wrong' }
+  const limit = closeDistanceFor(target.length)
+  if (limit > 0 && editDistance(guess, target) <= limit) return { status: 'close' }
+  return { status: 'wrong' }
 }

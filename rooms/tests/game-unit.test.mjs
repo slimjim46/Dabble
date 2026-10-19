@@ -6,9 +6,12 @@ import { GAME_TIMING, HINT_FRACTIONS, PHASES, TARGET_ROUNDS, WORD_OPTIONS, gameT
 import {
   acceptPick,
   advance,
+  closeDistanceFor,
   isDrawerPhase,
   isSecretPhase,
+  judgeGuess,
   newGameState,
+  normaliseGuess,
   revealFrame,
   rotation,
   secretsAllowed,
@@ -312,6 +315,83 @@ const PLAYERS = ['u1', 'u2', 'u3']
     check(`table: N=${n} divides evenly`, r.rounds % Number(n) === 0)
   }
   check('table: the design has no player cap of 6', rotation(12).rounds === 12)
+}
+
+// ---- guessing: normalisation, closeness, cap reset (v2 Phase 3 step 4a) ------
+{
+  // Normalisation: case, accents, zero-width/control, whitespace, edge punct.
+  const norm = [
+    ['  House ', 'house'],
+    ['CAFÉ', 'cafe'], // accent stripped
+    ['ice cream', 'ice cream'],
+    ['ice\u200bcream', 'icecream'], // zero-width removed (space also gone)
+    ['he\u0000llo', 'hello'], // control char removed
+    ['(banana)!', 'banana'], // edge punctuation stripped
+    ['a   b', 'a b'], // whitespace collapsed
+    ['   ', ''],
+    ['!!!', ''],
+  ]
+  for (const [input, expected] of norm) {
+    check(`normalise: ${JSON.stringify(input)} -> ${JSON.stringify(expected)}`,
+      normaliseGuess(input) === expected, JSON.stringify(normaliseGuess(input)))
+  }
+
+  // The fixed judge table. "correct" means an exact match after normalisation;
+  // "close" follows the distance rule; "wrong" is everything else.
+  const table = [
+    // exact / case / accents / whitespace / punctuation
+    ['house', 'house', 'correct'],
+    ['house', 'HOUSE', 'correct'],
+    ['cafe', 'café', 'correct'],
+    ['ice cream', 'icecream', 'correct'],
+    ['ice cream', 'ice-cream', 'correct'],
+    ['ice-cream', 'ice cream', 'correct'],
+    ['sun', ' sun ', 'correct'],
+    ['boat', 'boat!', 'correct'],
+    // close: distance 1 for words up to 7 letters
+    ['house', 'hose', 'close'], // distance 1
+    ['house', 'hous', 'close'],
+    ['house', 'housee', 'close'],
+    ['planet', 'planets', 'close'], // 6 letters, distance 1
+    // close: distance 2 for 8+ letters
+    ['elephant', 'elefant', 'close'], // 8 letters, distance 1
+    ['elephant', 'elephunt', 'close'], // distance 1
+    ['basketball', 'basketbal', 'close'], // 10, distance 1
+    ['strawberry', 'strawbury', 'close'], // 10, distance 2 (ea->u, y? -> compute)
+    // never close for a guess under 3 characters
+    ['cat', 'c', 'wrong'],
+    ['cat', 'ca', 'wrong'],
+    // 3 letters ARE eligible: distance 1
+    ['cat', 'car', 'close'],
+    ['cat', 'bat', 'close'],
+    // wrong
+    ['house', 'tree', 'wrong'],
+    ['planets', 'plan', 'wrong'],
+    // empty after normalising -> wrong (the DO ignores it before judging)
+    ['house', '   ', 'wrong'],
+    ['house', '!!!', 'wrong'],
+  ]
+  for (const [word, guess, expected] of table) {
+    const got = judgeGuess(word, guess)
+    check(`judge: ${JSON.stringify(word)} vs ${JSON.stringify(guess)} -> ${expected}`,
+      got.status === expected, JSON.stringify(got))
+  }
+
+  check('closeDistanceFor: 0 under 3, 1 up to 7, 2 from 8',
+    closeDistanceFor(2) === 0 && closeDistanceFor(3) === 1 && closeDistanceFor(7) === 1 &&
+    closeDistanceFor(8) === 2 && closeDistanceFor(20) === 2)
+
+  // The per-user guess counter resets at every round start and in the lobby.
+  const game = newGameState()
+  startGame(game, ['u1', 'u2'], T0, TIMES, ['apple', 'bread', 'chair'])
+  game.guessCount = { u2: 7 }
+  // startGame -> beginPick is the round start; a fresh start resets the counter.
+  startGame(game, ['u1', 'u2'], T0 + 5, TIMES, ['apple', 'bread', 'chair'])
+  check('guessCount: reset when a round starts',
+    Object.keys(game.guessCount).length === 0, JSON.stringify(game.guessCount))
+  game.guessCount = { u2: 3 }
+  toLobby(game)
+  check('guessCount: reset in the lobby', Object.keys(game.guessCount).length === 0)
 }
 
 summary('game-unit')

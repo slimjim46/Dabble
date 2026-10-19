@@ -5,7 +5,7 @@
 //
 //   node tests/game-storage-unit.test.mjs
 import { Room } from '../src/room.js'
-import { newGameState } from '../src/game.js'
+import { newGameState, stateFrame } from '../src/game.js'
 import { roundKey } from '../src/round.js'
 import { check, summary } from './helpers.mjs'
 
@@ -393,6 +393,39 @@ async function newRoom(seed = {}, env = ENV) {
   await room2.alarm()
   check('grace: a held drawer inside the grace is still drawing',
     r2.game.phase === 'drawing' && r2.game.drawerGraceAt > 0, JSON.stringify({ phase: r2.game.phase }))
+}
+
+// ---- guesses survive an eviction reload -------------------------------------
+{
+  const game = {
+    ...newGameState(), gameSeq: 1, phase: 'drawing', round: 1, rounds: 6,
+    order: ['u1', 'u2'], drawerUserId: 'u1', word: 'pizza',
+    phaseEndsAt: Date.now() + 100000, deadlineAt: Date.now() + 100000,
+  }
+  const first = await newRoom({ room: seededRoom(game) })
+  const r1 = await first.room.load()
+  const guesserWs = fakeSocket('u2')
+  first.state.sockets.push(guesserWs)
+  const before = guesserWs.frames.length
+  await first.room.webSocketMessage(guesserWs, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('evict: a correct guess is saved before any reload',
+    r1.game.correct.includes('u2') && r1.game.guessCount.u2 === 1,
+    JSON.stringify({ correct: r1.game.correct, guessCount: r1.game.guessCount }))
+  check('evict: the correct guesser gets a private ok ack',
+    guesserWs.frames.slice(before).some((f) => f.t === 'guess_ack' && f.ok === true))
+
+  // Evict: a brand-new Room instance reads the same storage map. Identity that
+  // must outlive the instance (who already guessed) comes back from storage.
+  const second = await newRoom(Object.fromEntries(first.state.map))
+  const r2 = await second.room.load()
+  check('evict: the correct list survives eviction', r2.game.correct.includes('u2'),
+    JSON.stringify(r2.game.correct))
+  check('evict: the per-user guess count survives eviction', r2.game.guessCount.u2 === 1,
+    JSON.stringify(r2.game.guessCount))
+  const reloadedState = stateFrame(r2.game, Date.now())
+  check('evict: the secret word is still masked in the public state after reload',
+    reloadedState.phase === 'drawing' && reloadedState.wordLen === 5 &&
+    !JSON.stringify(reloadedState).includes('pizza'), JSON.stringify(reloadedState))
 }
 
 summary('game-storage-unit')

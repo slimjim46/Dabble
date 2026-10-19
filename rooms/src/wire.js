@@ -10,6 +10,7 @@
 import {
   BRUSH_IDS,
   MAX_FINAL_POINT_NUMBERS,
+  MAX_GUESS_LENGTH,
   MAX_KEY_LENGTH,
   MAX_LIVE_BATCH_NUMBERS,
   MAX_NAME_LENGTH,
@@ -138,6 +139,14 @@ export function parsePick(p) {
   return { i: p.i }
 }
 
+// A guess is hostile free text. The parser only enforces shape and length; the
+// text is normalised and compared in the DO and never stored, relayed or logged.
+export function parseGuess(p) {
+  if (!p || typeof p.text !== 'string') return null
+  if (p.text.length === 0 || p.text.length > MAX_GUESS_LENGTH) return null
+  return { text: p.text }
+}
+
 // Every event type the DO accepts from clients, with its validator.
 export const CLIENT_TYPES = Object.freeze({
   stroke_start: parseStrokeStart,
@@ -148,6 +157,7 @@ export const CLIENT_TYPES = Object.freeze({
   kick: parseKick,
   start: parseStart,
   pick: parsePick,
+  guess: parseGuess,
 })
 
 // Types governed by a strict "one open stroke per connection" ownership rule.

@@ -15,6 +15,7 @@ export const ROOM_ERROR_COPY = {
   too_many: 'Too many connections from this network.',
   rate_limited: 'Too many joins right now. Try again shortly.',
   busy: 'The rooms server is busy. Try again in a moment.',
+  guess_cap: 'You have used all your guesses for this round.',
   unreachable: 'Cannot reach the rooms server.',
   full: 'That room is full.',
   join_failed: 'Could not join the room.',
@@ -42,3 +43,10 @@ export const RETRYABLE_ERRORS = Object.freeze([
  * coverage check in tests/roomClient.test.mjs is complete rather than partial.
  */
 export const TRANSPORT_ONLY_ERRORS = Object.freeze(['full'])
+
+/**
+ * Reasons the server may send in an `error` frame. Not connection errors: the
+ * screen shows them as a transient notice beside `busy`. Listed so the copy
+ * coverage check counts them as reachable.
+ */
+export const SERVER_NOTICE_ERRORS = Object.freeze(['busy', 'guess_cap'])

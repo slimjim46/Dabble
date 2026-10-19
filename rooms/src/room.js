@@ -14,6 +14,7 @@ import {
   CLOSE_POLICY,
   CLOSE_TOO_BIG,
   KICK_CLOSE,
+  MAX_GUESSES_PER_ROUND,
   MAX_PLAYERS,
   MAX_MSG_BYTES,
   MAX_ROOM_LIFETIME_MS,
@@ -33,7 +34,9 @@ import {
   advance,
   acceptPick,
   isDrawerPhase,
+  judgeGuess,
   newGameState,
+  normaliseGuess,
   revealFrame,
   secretsAllowed,
   skipRound,
@@ -55,6 +58,7 @@ const OPEN = 1 // WebSocket.OPEN
 function groupOf(type) {
   if (type === 'cursor') return 'cursor'
   if (type === 'stroke_points') return 'stroke_points'
+  if (type === 'guess') return 'guess'
   return 'other'
 }
 
@@ -589,6 +593,10 @@ export class Room {
       await this.handlePick(room, att, p, ws)
       return
     }
+    if (env.t === 'guess') {
+      await this.handleGuess(room, att, p, ws)
+      return
+    }
 
     // Identity is overwritten from the attachment; only whitelisted fields
     // are forwarded — a client object is never spread into a broadcast.
@@ -714,6 +722,53 @@ export class Room {
     this.broadcast(stateFrame(game, Date.now()))
     this.sendFrame(ws, yourWordFrame(game))
     logEvent('word_picked', { round: game.round })
+  }
+
+  /**
+   * One guess from a non-drawer during drawing. The text is normalised,
+   * compared and discarded: it is never stored, relayed or logged. Every
+   * ignored guess still keeps its decremented rate bucket (the attachment is
+   * re-serialised before returning), exactly like the stroke gate, so an
+   * ignored-guess flood still closes 1008 rather than being free.
+   */
+  async handleGuess(room, att, p, ws) {
+    const game = room.game
+    const ignore = (reason) => {
+      ws.serializeAttachment(att) // keep the decremented guess budget bucket
+      logEvent('guess_ignored', { reason })
+    }
+    if (game.phase !== 'drawing') return ignore('phase')
+    if (!att.userId || att.userId === game.drawerUserId) return ignore('drawer')
+    if (game.correct.includes(att.userId)) return ignore('already')
+    const text = normaliseGuess(p.text)
+    if (text.length === 0) return ignore('empty')
+
+    // Per-user cap: the 21st accepted guess in a round is a transient error for
+    // that guesser only, never a close. The counter lives in game.guessCount
+    // and is NOT persisted here (only a correct guess saves).
+    const used = game.guessCount[att.userId] || 0
+    if (used >= MAX_GUESSES_PER_ROUND) {
+      ws.serializeAttachment(att)
+      this.sendFrame(ws, { v: 1, t: 'error', reason: 'guess_cap' })
+      logEvent('guess_capped', { used })
+      return
+    }
+    game.guessCount[att.userId] = used + 1
+
+    const { status } = judgeGuess(game.word, p.text)
+    if (status === 'correct') {
+      game.correct.push(att.userId)
+      // Persist so the correct list survives hibernation or eviction.
+      await this.saveSafe(room)
+      this.broadcast(stateFrame(game, Date.now()))
+      this.sendFrame(ws, { v: 1, t: 'guess_ack', ok: true, close: false })
+      logEvent('guess_correct', { n: game.correct.length })
+      return
+    }
+    // Wrong: private feedback only. The guesser's own text never leaves here.
+    ws.serializeAttachment(att)
+    this.sendFrame(ws, { v: 1, t: 'guess_ack', ok: false, close: status === 'close' })
+    logEvent('guess_wrong', { close: status === 'close' })
   }
 
   /**

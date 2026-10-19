@@ -114,5 +114,93 @@ check('a sustained flood closes 1008', !!flooded, JSON.stringify(back.closes))
   await fB.close()
 }
 
+// 8. Guessing (v2 Phase 3 step 4a). The word and every guess text stay
+// server-side: a guesser who reads their raw WebSocket traffic must never see
+// the word or another player's guess, the drawer's guesses are ignored, the
+// per-user cap is a transient error (no close), and an ignored-guess flood
+// still closes 1008.
+{
+  const gHost = await anonUser()
+  const gb = await createRoom(gHost.token)
+  const gCode = gb.body.code
+  const gA = await connect(gCode, gHost.token)
+  const gU2 = await anonUser()
+  const gB = await connect(gCode, gU2.token)
+  gA.ws.send(start)
+  const gPick = await gA.waitFor((m) => m.t === 'state' && m.phase === 'pick', 8000)
+  const gDrawer = gPick?.drawer === gHost.userId ? gA : gB
+  const gGuesser = gDrawer === gA ? gB : gA
+  const gwp = await gDrawer.waitFor((m) => m.t === 'word_pick', 5000)
+  const theWord = gwp?.options?.[1] ?? wp?.options?.[1] ?? null
+  check('cheat: the drawer got a word to pick', typeof theWord === 'string' && theWord.length > 0)
+  gDrawer.ws.send(pick(1))
+  await gDrawer.waitFor((m) => m.t === 'state' && m.phase === 'drawing', 5000)
+
+  // (a) The drawer's own guesses are ignored: no ack, no correct, no text.
+  const before = gDrawer.messages.length
+  for (let i = 0; i < 3; i++) gDrawer.ws.send(JSON.stringify({ v: 1, t: 'guess', text: theWord }))
+  await sleep(400)
+  const drawerAcks = gDrawer.json().slice(before).filter((m) => m.t === 'guess_ack')
+  check('cheat: a drawer guess is ignored (no ack)', drawerAcks.length === 0, JSON.stringify(drawerAcks))
+  check('cheat: a drawer guess never marks anyone correct',
+    !gA.json().some((m) => m.t === 'state' && (m.correct ?? []).length > 0))
+
+  // (b) Wrong guesses: private feedback only, generic when not close.
+  gGuesser.ws.send(JSON.stringify({ v: 1, t: 'guess', text: 'zzzzzzzz' }))
+  const wrong = await gGuesser.waitFor((m) => m.t === 'guess_ack' && m.ok === false, 4000)
+  check('cheat: a wrong guess gets a private ack with close=false',
+    wrong?.ok === false && wrong?.close === false, JSON.stringify(wrong))
+  // (c) The other player never sees the guess text anywhere in their traffic.
+  const guessed = 'zzzzzzzz'
+  check('cheat: another player never sees a guess text',
+    !gDrawer.messages.join('\n').includes(guessed))
+  check('cheat: the public state frame never carries the secret word',
+    gGuesser.json().filter((m) => m.t === 'state').every((m) => !JSON.stringify(m).includes(theWord)))
+
+  // (d) A correct guess: ack to the guesser, "guessed it" to everyone, and the
+  // word is STILL not in the public state or on the other socket.
+  gGuesser.ws.send(JSON.stringify({ v: 1, t: 'guess', text: theWord }))
+  const right = await gGuesser.waitFor((m) => m.t === 'guess_ack' && m.ok === true, 4000)
+  check('cheat: a correct guess acks ok', right?.ok === true, JSON.stringify(right))
+  const pub = await gDrawer.waitFor((m) => m.t === 'state' && (m.correct ?? []).length > 0, 4000)
+  check('cheat: everyone sees the public correct list grow', (pub?.correct ?? []).length === 1)
+  check('cheat: the public state still masks the word',
+    !JSON.stringify(pub).includes(theWord), JSON.stringify(pub))
+
+  // (e) The per-user cap: 21 accepted guesses -> guess_cap error, NO close.
+  // Respect the 2/s budget with the same 600 ms the client uses (1.67/s, 20%
+  // headroom): five at once, then 600 ms apart, so the cap is what we hit and
+  // the rate limit does not close the socket first.
+  const capHost = await anonUser()
+  const cb = await createRoom(capHost.token)
+  const cCode = cb.body.code
+  const cA = await connect(cCode, capHost.token)
+  const cU2 = await anonUser()
+  const cB = await connect(cCode, cU2.token)
+  cA.ws.send(start)
+  const cPick = await cA.waitFor((m) => m.t === 'state' && m.phase === 'pick', 8000)
+  const cDrawer = cPick?.drawer === capHost.userId ? cA : cB
+  const cGuesser = cDrawer === cA ? cB : cA
+  await cDrawer.waitFor((m) => m.t === 'word_pick', 5000)
+  cDrawer.ws.send(pick(0))
+  await cDrawer.waitFor((m) => m.t === 'state' && m.phase === 'drawing', 5000)
+  for (let i = 0; i < 5; i++) cGuesser.ws.send(JSON.stringify({ v: 1, t: 'guess', text: `wrong${i}` }))
+  for (let i = 5; i < 21; i++) {
+    await sleep(600)
+    cGuesser.ws.send(JSON.stringify({ v: 1, t: 'guess', text: `wrong${i}` }))
+  }
+  const capErr = await cGuesser.waitFor((m) => m.t === 'error' && m.reason === 'guess_cap', 4000)
+  check('cheat: the 21st guess is a guess_cap error, not a close', !!capErr, JSON.stringify(cGuesser.json().slice(-3)))
+  check('cheat: the capped guesser is not closed', !cGuesser.closed)
+
+  // (f) An ignored-guess flood by the DRAWER still closes 1008 (ignored but
+  // billed, exactly like the stroke gate).
+  for (let i = 0; i < 200; i++) cDrawer.ws.send(JSON.stringify({ v: 1, t: 'guess', text: 'flood' }))
+  const gClosed = await cDrawer.waitForClose(1008, 5000)
+  check('cheat: a drawer guess flood still closes 1008', !!gClosed, JSON.stringify(cDrawer.closes))
+
+  for (const c of [gA, gB, cA, cB].filter((c) => !c.closed)) await c.close()
+}
+
 for (const c of [a, b, x, back].filter((c) => !c.closed)) await c.close()
 summary('game-cheat')

@@ -471,3 +471,69 @@
   border-color: var(--ui-text);
 }
 
+/* ---- guess bar (v2 Phase 3 step 4a) ---- */
+/* Sits at the bottom where the toolbar would be (a non-drawer has none), so
+   the keyboard opens right under the input and the paper above stays visible.
+   16px input text stops iOS Safari from zooming the page on focus. */
+.game-guess {
+  position: absolute;
+  left: 50%;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 3;
+  width: min(440px, calc(100vw - 20px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.game-guess-form {
+  display: flex;
+  gap: 8px;
+}
+
+.game-guess-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 16px;
+  color: var(--ui-text);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  outline: none;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.game-guess-feedback {
+  font-size: 12px;
+  color: var(--ui-muted);
+  text-align: center;
+}
+
+.game-guess-close {
+  color: var(--ui-text);
+  font-weight: 600;
+}
+
+.game-guess-ok {
+  color: #30a46c;
+  font-weight: 600;
+}
+
+.game-guess-correct {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ui-text);
+  text-align: center;
+  padding: 6px 10px;
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+

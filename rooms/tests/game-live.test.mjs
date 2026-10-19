@@ -394,4 +394,61 @@ const closeAll = async (conns) => {
   await closeAll(conns)
 }
 
+// ===========================================================================
+// H. Guessing (v2 Phase 3 step 4a): a live correct guess, the private wrong
+//    feedback, and the per-user cap surviving a reconnect while the DO is
+//    still awake (in-memory counter, no eviction).
+// ===========================================================================
+{
+  const { users, conns, code } = await roomWith(2)
+  const [host, peer] = conns
+
+  host.ws.send(start)
+  const pickState = await host.waitFor((m) => m.t === 'state' && m.phase === 'pick', 8000)
+  check('H: two seats start a game', !!pickState)
+  const drawer = pickState?.drawer === users[0].userId ? host : peer
+  const guesser = drawer === host ? peer : host
+  const wp = await drawer.waitFor((m) => m.t === 'word_pick', 5000)
+  const word = wp?.options?.[0] ?? null
+  check('H: the drawer has a word to pick', typeof word === 'string' && word.length > 0)
+  drawer.ws.send(pick(0))
+  await drawer.waitFor((m) => m.t === 'state' && m.phase === 'drawing', 5000)
+
+  // A wrong guess: private ack, not close, generic (the word is 6+ letters, so
+  // a distant string is never "close").
+  guesser.ws.send(JSON.stringify({ v: 1, t: 'guess', text: 'qqqqqqqqqq' }))
+  const wrong = await guesser.waitFor((m) => m.t === 'guess_ack' && m.ok === false, 4000)
+  check('H: a wrong guess acks privately with close=false',
+    wrong?.ok === false && wrong?.close === false, JSON.stringify(wrong))
+
+  // Drive the guesser to one below the cap across a reconnect: send 4 (inside
+  // the burst), drop the socket, reconnect before the 5 s seat hold expires,
+  // then send the rest. If the in-memory count survived, the cap still lands on
+  // the same round-crossing guess number.
+  const CAP = 20
+  const paceMs = 550
+  for (let i = 0; i < 4; i++) guesser.ws.send(JSON.stringify({ v: 1, t: 'guess', text: `nope${i}` }))
+  await sleep(120)
+  await guesser.close()
+  const back = await connect(code, users[conns.indexOf(guesser)].token)
+  const backSeat = back.welcome?.seat
+  check('H: the reconnect reclaims the same seat', backSeat === guesser.welcome?.seat,
+    `${backSeat} vs ${guesser.welcome?.seat}`)
+  await back.waitFor((m) => m.t === 'state' && m.phase === 'drawing', 4000).catch(() => null)
+  // 4 sent pre-reconnect; 16 more reaches 20 (all accepted), the 21st is the cap.
+  let capErr = false
+  for (let i = 4; i < CAP + 1; i++) {
+    await sleep(paceMs)
+    back.ws.send(JSON.stringify({ v: 1, t: 'guess', text: `nope${i}` }))
+    const hit = back.json().find((m) => m.t === 'error' && m.reason === 'guess_cap')
+    if (hit) { capErr = true; break }
+  }
+  check('H: the in-memory guess count survives a reconnect (cap still lands)',
+    capErr, JSON.stringify(back.json().slice(-3)))
+  check('H: the capped guesser is never closed', !back.closed)
+
+  await closeAll([host, peer])
+  await back.close()
+}
+
 summary('game-live')

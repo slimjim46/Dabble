@@ -50,6 +50,20 @@ export const MIN_PLAYERS = 2
 export const WORD_OPTIONS = 3
 export const MAX_WORD_LENGTH = 40
 
+// ---- guessing (v2 Phase 3 step 4a) -----------------------------------------
+// Must equal MAX_GUESS_LENGTH / MAX_GUESSES_PER_ROUND and the CLOSE_* values
+// in rooms/src/config.js; tests/roomClient.test.mjs asserts every pair.
+export const MAX_GUESS_LENGTH = 60
+export const MAX_GUESSES_PER_ROUND = 20
+export const MIN_CLOSE_LENGTH = 3
+export const CLOSE_MAX_LENGTH_FOR_DISTANCE_1 = 7
+export const CLOSE_DISTANCE_NEAR = 1
+export const CLOSE_DISTANCE_FAR = 2
+// The send button is disabled for this long after each guess. 600 ms is ~1.67
+// guesses/s, safely under the server's 2/s guess budget (a 400 ms gap would
+// allow 2.5/s and a fast tapper would be closed 1008). The test asserts it.
+export const ROOM_GUESS_SEND_DISABLE_MS = 600
+
 // ---- reconnect -------------------------------------------------------------
 // A dropped socket is retried with capped exponential backoff; every attempt
 // takes a fresh Supabase session first, because the token may have expired

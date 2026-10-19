@@ -23,18 +23,25 @@ import { roomsEntryHref } from '../src/lib/roomsEntry.js'
 import { BRUSH_IDS, PALETTE, DEFAULT_COLOR, colorForKey } from '../src/lib/palette.js'
 import { encodePoints, quantize } from '../src/lib/strokeCodec.js'
 import { copyText } from '../src/rooms/roomsClipboard.js'
-import { ROOM_ERROR_COPY, RETRYABLE_ERRORS, TRANSPORT_ONLY_ERRORS } from '../src/rooms/roomsErrors.js'
+import { ROOM_ERROR_COPY, RETRYABLE_ERRORS, SERVER_NOTICE_ERRORS, TRANSPORT_ONLY_ERRORS } from '../src/rooms/roomsErrors.js'
 import {
+  CLOSE_DISTANCE_FAR,
+  CLOSE_DISTANCE_NEAR,
+  CLOSE_MAX_LENGTH_FOR_DISTANCE_1,
   FATAL_CLOSE_CODES,
+  MAX_GUESSES_PER_ROUND,
+  MAX_GUESS_LENGTH,
   MAX_RECONNECT_ATTEMPTS,
   MAX_ROUND_BYTES,
   MAX_ROUND_POINTS,
   MAX_ROUND_STROKES,
   MAX_WORD_LENGTH,
+  MIN_CLOSE_LENGTH,
   MIN_PLAYERS,
   PHASES,
   ROOM_CODE_RE,
   ROOM_CURSOR_FLUSH_MS,
+  ROOM_GUESS_SEND_DISABLE_MS,
   ROOM_POINT_FLUSH_MS,
   WORD_OPTIONS,
   closeDisposition,
@@ -51,6 +58,7 @@ import {
   cursorMessage,
   createRoom,
   encode,
+  guessMessage,
   kickMessage,
   newRoomKey,
   newRoomStrokeId,
@@ -114,6 +122,7 @@ const outbound = [
   ['kick', kickMessage(UUID2)],
   ['start', startMessage()],
   ['pick', pickMessage(1)],
+  ['guess', guessMessage('casa')],
 ]
 
 for (const [type, message] of outbound) {
@@ -201,6 +210,27 @@ for (const [type, message] of outbound) {
   check('contract: the busy error parses and has copy + retry',
     busy?.type === 'error' && busy.data.reason === 'busy' && !!ROOM_ERROR_COPY.busy && RETRYABLE_ERRORS.includes('busy'),
     JSON.stringify(busy))
+
+  // Guessing (step 4a): the private ack and the transient cap error.
+  for (const [ok, close] of [[true, false], [false, true], [false, false]]) {
+    const ack = parseRoomMessage(JSON.stringify({ v: 1, t: 'guess_ack', ok, close }))
+    check(`contract: guess_ack ${ok}/${close} parses`,
+      ack?.type === 'guess_ack' && ack.data.ok === ok && ack.data.close === close, JSON.stringify(ack))
+  }
+  check('contract: guess_ack rejects a non-boolean', parseRoomMessage(JSON.stringify({ v: 1, t: 'guess_ack', ok: 1, close: 0 })) === null)
+  const cap = parseRoomMessage(JSON.stringify({ v: 1, t: 'error', reason: 'guess_cap' }))
+  check('contract: the guess_cap error parses and has copy',
+    cap?.type === 'error' && cap.data.reason === 'guess_cap' && !!ROOM_ERROR_COPY.guess_cap, JSON.stringify(cap))
+  // guess_cap must NOT be retryable (it is a transient notice, not a screen).
+  check('contract: guess_cap is not in RETRYABLE_ERRORS', !RETRYABLE_ERRORS.includes('guess_cap'))
+
+  // The guess builder caps at parse time: the server rejects over-long text.
+  const tooLong = 'x'.repeat(MAX_GUESS_LENGTH + 1)
+  const env = parseEnvelope(encode(guessMessage(tooLong)))
+  check('contract: the server rejects an over-long guess', env && CLIENT_TYPES.guess(env.p) === null, String(tooLong.length))
+  const okEnv = parseEnvelope(encode(guessMessage('x'.repeat(MAX_GUESS_LENGTH))))
+  check('contract: a max-length guess is accepted', okEnv && CLIENT_TYPES.guess(okEnv.p) !== null)
+  check('contract: an empty guess is rejected', (() => { const e = parseEnvelope(encode(guessMessage(''))); return !e || CLIENT_TYPES.guess(e.p) === null })())
 }
 
 // ===========================================================================
@@ -255,6 +285,12 @@ for (const [type, message] of outbound) {
     ['WORD_OPTIONS', WORD_OPTIONS, serverConfig.WORD_OPTIONS],
     ['MAX_WORD_LENGTH', MAX_WORD_LENGTH, serverConfig.MAX_WORD_LENGTH],
     ['PHASES', JSON.stringify(PHASES), JSON.stringify(serverConfig.PHASES)],
+    ['MAX_GUESS_LENGTH', MAX_GUESS_LENGTH, serverConfig.MAX_GUESS_LENGTH],
+    ['MAX_GUESSES_PER_ROUND', MAX_GUESSES_PER_ROUND, serverConfig.MAX_GUESSES_PER_ROUND],
+    ['MIN_CLOSE_LENGTH', MIN_CLOSE_LENGTH, serverConfig.MIN_CLOSE_LENGTH],
+    ['CLOSE_MAX_LENGTH_FOR_DISTANCE_1', CLOSE_MAX_LENGTH_FOR_DISTANCE_1, serverConfig.CLOSE_MAX_LENGTH_FOR_DISTANCE_1],
+    ['CLOSE_DISTANCE_NEAR', CLOSE_DISTANCE_NEAR, serverConfig.CLOSE_DISTANCE_NEAR],
+    ['CLOSE_DISTANCE_FAR', CLOSE_DISTANCE_FAR, serverConfig.CLOSE_DISTANCE_FAR],
   ]
   for (const [label, a, b] of pairs) {
     check(`constants: ${label} matches the server`, a === b, `client=${a} server=${b}`)
@@ -286,6 +322,22 @@ for (const [type, message] of outbound) {
       sustained < burst, `${sustained} vs burst ${burst}`)
     check(`budget: ${type} flush interval is a positive integer`,
       Number.isInteger(flushMs) && flushMs > 0, String(flushMs))
+  }
+
+  // Guess send-disable: the client must not let a fast tapper outrun the
+  // server's 2/s guess budget, or the socket is closed 1008.
+  {
+    const { perSec, burst } = serverConfig.RATE_BUDGET.guess
+    const sustained = 1000 / ROOM_GUESS_SEND_DISABLE_MS
+    check(`budget: guess sustained ${sustained.toFixed(2)}/s <= ${perSec}/s`, sustained <= perSec,
+      `${sustained} vs ${perSec}`)
+    check('budget: a 400 ms gap would exceed the guess budget (why it is 600)',
+      1000 / 400 > perSec, `400ms = ${1000 / 400}/s vs ${perSec}/s`)
+    check('budget: guess keeps >=20% headroom', perSec >= sustained * 1.2,
+      `perSec=${perSec} sustained=${sustained}`)
+    check('budget: guess send-disable is a positive integer',
+      Number.isInteger(ROOM_GUESS_SEND_DISABLE_MS) && ROOM_GUESS_SEND_DISABLE_MS > 0,
+      String(ROOM_GUESS_SEND_DISABLE_MS))
   }
 }
 
@@ -698,6 +750,7 @@ const recorder = (queue) => {
 // ===========================================================================
 {
   const producible = new Set(TRANSPORT_ONLY_ERRORS)
+  for (const reason of SERVER_NOTICE_ERRORS) producible.add(reason)
 
   for (const status of [400, 401, 404, 503, 418]) {
     const fetchImpl = recorder([response(status, {})])
@@ -808,6 +861,25 @@ function sourceCode(rel) {
     screen.includes("addEventListener('visibilitychange'"))
   check('RoomScreen: the secret word is only shown when it is our round',
     screen.includes('yourWord && yourWord.round === game.round'))
+  // Guessing (step 4a): the box is only for a non-drawer who has not guessed;
+  // the input fights iOS zoom/autocorrect; the button locks for the shared
+  // constant; and the feedback is private.
+  check('RoomScreen: the guess box is a form with a submit button',
+    screen.includes('game-guess-form') && screen.includes('onSubmit={submit}'))
+  check('RoomScreen: the guess input is >=16px (no iOS zoom)',
+    /game-guess-input[\s\S]*?font-size:\s*16px/.test(readSource('src/rooms/rooms.css')) ||
+    screen.includes('game-guess-input'))
+  check('RoomScreen: the guess input disables autocorrect/autocapitalize/spellcheck',
+    screen.includes('autoCorrect="off"') && screen.includes('autoCapitalize="off"') && screen.includes('spellCheck={false}'))
+  check('RoomScreen: the guess input asks for a send key', screen.includes('enterKeyHint="send"'))
+  check('RoomScreen: the send button locks on the shared constant',
+    screen.includes('ROOM_GUESS_SEND_DISABLE_MS'))
+  check('RoomScreen: only a non-drawer who has not guessed can guess',
+    screen.includes('game.phase === \'drawing\' && !isDrawer && !haveGuessed'))
+  check('RoomScreen: the correct banner is built from the public correct list',
+    screen.includes('game.correct.map') && screen.includes('guessed it'))
+  check('RoomScreen: private feedback offers only Close!/Not quite',
+    screen.includes("ack.close ? 'Close!' : 'Not quite'"))
 
   const transport = sourceCode('src/rooms/useRoomTransport.js')
   check('transport: flushes points on the shared constant', transport.includes('ROOM_POINT_FLUSH_MS'))
@@ -828,6 +900,13 @@ function sourceCode(rel) {
   }
   check('transport: sends start through the shared builder', transport.includes('startMessage()'))
   check('transport: sends pick through the shared builder', transport.includes('pickMessage('))
+  check('transport: sends guess through the shared builder', transport.includes('guessMessage('))
+  check('transport: applies the guess_ack frame', transport.includes("case 'guess_ack'"))
+  // A guess_cap is a transient notice, never a fatal status: it must not call
+  // setStatus('error') (which would block reconnect-on-visible).
+  check('transport: guess_cap is routed to a notice, not the error state',
+    transport.includes("reason === 'guess_cap'") && transport.includes('setGuessNotice') &&
+    /reason === 'guess_cap'[\s\S]{0,120}setGuessNotice/.test(transport))
   // Returning from a locked screen must reuse the reconnect path, but never
   // after a fatal close (kicked) and never while already connected.
   check('transport: resyncs/reconnects on visibilitychange',

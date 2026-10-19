@@ -4,7 +4,7 @@ import { createStrokeStore } from '../engine/strokeStore.js'
 import { loadIdentity } from '../lib/identity.js'
 import { copyText } from './roomsClipboard.js'
 import { RETRYABLE_ERRORS, ROOM_ERROR_COPY } from './roomsErrors.js'
-import { MIN_PLAYERS } from './roomsConfig.js'
+import { ROOM_GUESS_SEND_DISABLE_MS, MAX_GUESS_LENGTH, MIN_PLAYERS } from './roomsConfig.js'
 import RoomPaper from './RoomPaper.jsx'
 import { useRoomTransport } from './useRoomTransport.js'
 
@@ -21,7 +21,7 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
   const [kickToast, setKickToast] = useState(null)
   const codeRef = useRef(null)
 
-  const { api, status, ready, error, players, seat, isHost, kickNotice, game, wordPick, yourWord, reveal } =
+  const { api, status, ready, error, players, seat, isHost, kickNotice, game, wordPick, yourWord, reveal, guessAck, guessNotice } =
     useRoomTransport({
       roomsUrl,
       code,
@@ -54,6 +54,16 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
   // hidden rather than shown dead.
   const inGame = !!game && game.phase !== 'lobby'
   const canDraw = ready && (!inGame || (game.phase === 'drawing' && isDrawer))
+
+  // Guessing (step 4a): a non-drawer may guess while a round is drawing, until
+  // they have guessed correctly. The server is the authority; this only decides
+  // what the screen offers.
+  const haveGuessed = !!game && myUserId !== null && (game.correct ?? []).includes(myUserId)
+  const canGuess = ready && !!game && game.phase === 'drawing' && !isDrawer && !haveGuessed
+  const correctNames = useMemo(() => {
+    if (!game?.correct?.length) return []
+    return game.correct.map((uid) => players.find((p) => p.userId === uid)?.name ?? 'Someone')
+  }, [game, players])
 
   useEffect(() => {
     if (!copied) return undefined
@@ -103,6 +113,15 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
         reveal={reveal}
         onStart={() => api.start()}
         onPick={(i) => api.pick(i)}
+      />
+
+      <GuessBar
+        canGuess={canGuess}
+        haveGuessed={haveGuessed}
+        ack={guessAck}
+        notice={guessNotice}
+        correctNames={correctNames}
+        onGuess={(text) => api.guess(text)}
       />
 
       <div className="room-bar">
@@ -261,10 +280,89 @@ function remaining(game) {
 }
 
 /**
- * The header above the paper. It is a pure renderer of server frames: no
- * timer authority, no local guessing of the word, and no scores invented in
- * step 3. `reveal`/`scores` show what the server sent and say the numbers
- * arrive later.
+ * The guess control and its private feedback (v2 Phase 3 step 4a). Only the
+ * guesser ever sees the outcome; other players only learn that someone guessed
+ * via the public `correct` list, which never carries the text. The send button
+ * is disabled for ROOM_GUESS_SEND_DISABLE_MS after a guess so a fast tapper
+ * cannot outrun the server's 2/s guess budget.
+ */
+function GuessBar({ canGuess, haveGuessed, ack, notice, correctNames, onGuess }) {
+  const [text, setText] = useState('')
+  const [lockedUntil, setLockedUntil] = useState(0)
+  const [tick, setTick] = useState(0)
+  const inputRef = useRef(null)
+
+  useEffect(() => {
+    if (lockedUntil <= Date.now()) return undefined
+    const timer = setInterval(() => setTick((n) => n + 1), 100)
+    return () => clearInterval(timer)
+  }, [lockedUntil])
+
+  if (!canGuess && !haveGuessed && !correctNames.length) return null
+
+  const locked = Date.now() < lockedUntil
+  const submit = (event) => {
+    event.preventDefault()
+    const value = text.trim()
+    if (!value || locked) return
+    onGuess(value)
+    setText('')
+    setLockedUntil(Date.now() + ROOM_GUESS_SEND_DISABLE_MS)
+    setTick((n) => n + 1)
+    inputRef.current?.focus()
+  }
+
+  return (
+    <div className="game-guess">
+      {correctNames.length > 0 && (
+        <div className="game-guess-correct" role="status">
+          {correctNames.length === 1 ? `${correctNames[0]} guessed it` : `${correctNames.length} guessed it`}
+        </div>
+      )}
+      {canGuess ? (
+        <form className="game-guess-form" onSubmit={submit}>
+          <input
+            ref={inputRef}
+            className="game-guess-input"
+            type="text"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            placeholder="Type your guess…"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
+            enterKeyHint="send"
+            aria-label="Your guess"
+            maxLength={MAX_GUESS_LENGTH}
+          />
+          <button type="submit" className="room-primary" disabled={locked || text.trim().length === 0}>
+            Guess
+          </button>
+        </form>
+      ) : haveGuessed ? (
+        <div className="game-guess-feedback game-guess-ok" role="status">
+          You guessed it
+        </div>
+      ) : null}
+      {ack && ack.ok === false && (
+        <div className={`game-guess-feedback ${ack.close ? 'game-guess-close' : ''}`} role="status" key={ack.at}>
+          {ack.close ? 'Close!' : 'Not quite'}
+        </div>
+      )}
+      {notice?.reason === 'guess_cap' && (
+        <div className="game-guess-feedback" role="status" key={notice.at}>
+          You have used all your guesses for this round.
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The header above the paper. It renders server frames only: no timer
+ * authority, no locally invented word, and no scores the server did not send.
+ * Step 4a adds guessing; the scoreboards arrive in step 4b.
  */
 function GameHeader({
   game,

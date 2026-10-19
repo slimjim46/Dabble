@@ -53,6 +53,7 @@ export const WIRE_VERSION = 1
 export const RATE_BUDGET = {
   cursor: { perSec: 5, burst: 10 },
   stroke_points: { perSec: 20, burst: 40 },
+  guess: { perSec: 2, burst: 5 },
   other: { perSec: 5, burst: 10 },
 }
 
@@ -130,6 +131,20 @@ export const MAX_WORD_LENGTH = 40
 export const HINT_FRACTIONS = Object.freeze([0.5, 0.75]) // reveal letters, never the whole word
 export const TARGET_ROUNDS = 6 // rounds per game, split evenly over the players
 export const STORAGE_NOTICE_COOLDOWN_MS = 5000 // one busy error per cooldown
+
+// ---- Guessing (v2 Phase 3 step 4a) -----------------------------------------
+// All guess text stays server-side: it is normalised, compared, and discarded.
+// Guesses are never stored, broadcast or logged. Mirrors roomsConfig.js; the
+// shared values are asserted equal in tests/roomClient.test.mjs.
+export const MAX_GUESS_LENGTH = 60 // parse-time cap, before normalisation
+export const MAX_GUESSES_PER_ROUND = 20 // per user id per round; the 21st is an error, not a close
+// "Close!" edit distance, by normalised word length. Never for guesses under 3
+// characters (MIN_CLOSE_LENGTH), because distance 1 on a 2-letter word is a
+// different word. Distance 1 up to 7 letters, 2 from 8 letters up.
+export const MIN_CLOSE_LENGTH = 3
+export const CLOSE_MAX_LENGTH_FOR_DISTANCE_1 = 7
+export const CLOSE_DISTANCE_NEAR = 1
+export const CLOSE_DISTANCE_FAR = 2
 
 // Defaults: 6 rounds x 60 s drawing is ~10 minutes per game.
 export const GAME_TIMING = Object.freeze({

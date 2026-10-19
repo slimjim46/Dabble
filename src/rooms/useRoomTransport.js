@@ -3,6 +3,7 @@ import { decodePoints, quantize } from '../lib/strokeCodec.js'
 import { colorForKey } from '../lib/palette.js'
 import {
   MAX_FINAL_POINT_NUMBERS,
+  MAX_GUESS_LENGTH,
   MAX_LIVE_BATCH_NUMBERS,
   ROOM_CURSOR_FLUSH_MS,
   ROOM_POINT_FLUSH_MS,
@@ -12,6 +13,7 @@ import { createRoomsAuth } from './roomsAuth.js'
 import {
   cursorMessage,
   encode,
+  guessMessage,
   kickMessage,
   newRoomKey,
   parseRoomMessage,
@@ -61,6 +63,10 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
   const [wordPick, setWordPick] = useState(null)
   const [yourWord, setYourWord] = useState(null)
   const [reveal, setReveal] = useState(null)
+  // Guessing (v2 Phase 3 step 4a): the private reply to our own guess and a
+  // transient per-round cap notice. Neither is a connection error.
+  const [guessAck, setGuessAck] = useState(null)
+  const [guessNotice, setGuessNotice] = useState(null)
 
   const visualRef = useRef(onVisualChange)
   visualRef.current = onVisualChange
@@ -116,6 +122,8 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
           setWordPick(null)
           setYourWord(null)
           setReveal(null)
+          setGuessAck(null)
+          setGuessNotice(null)
           break
         }
 
@@ -276,10 +284,18 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
           setReveal(frame.data)
           break
 
+        // The private reply to one guess. Only the guesser ever receives it;
+        // the text and the word are never in it.
+        case 'guess_ack':
+          setGuessAck({ ...frame.data, at: Date.now() })
+          break
+
         case 'error':
-          // Storage trouble on the server: the game continues in memory. The
-          // screen shows a non-fatal busy notice (step 4 wires the UI).
-          setError(frame.data.reason)
+          // A transient server notice. `guess_cap` must NOT become a fatal
+          // `status: 'error'` screen (that would block reconnect-on-visible),
+          // so it is kept as a notice beside `busy`.
+          if (frame.data.reason === 'guess_cap') setGuessNotice({ reason: 'guess_cap', at: Date.now() })
+          else setError(frame.data.reason)
           break
 
         default:
@@ -460,6 +476,11 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
       pick(i) {
         send(pickMessage(i))
       },
+      guess(text) {
+        const t = typeof text === 'string' ? text.trim() : ''
+        if (t.length === 0 || t.length > MAX_GUESS_LENGTH) return
+        send(guessMessage(t))
+      },
       leave() {
         s.deliberate = true
         s.waitingForOnline = false
@@ -479,6 +500,8 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
         setWordPick(null)
         setYourWord(null)
         setReveal(null)
+        setGuessAck(null)
+        setGuessNotice(null)
       },
       retry() {
         clearTimeout(s.retryTimer)
@@ -582,5 +605,8 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
     return () => clearInterval(timer)
   }, [cursors, store, notify])
 
-  return { api, status, ready, error, players, seat, isHost, kickNotice, game, wordPick, yourWord, reveal }
+  return {
+    api, status, ready, error, players, seat, isHost, kickNotice,
+    game, wordPick, yourWord, reveal, guessAck, guessNotice,
+  }
 }

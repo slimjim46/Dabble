@@ -15,6 +15,7 @@ import { BRUSH_IDS, PALETTE } from '../lib/palette.js'
 import { encodePoints, quantize } from '../lib/strokeCodec.js'
 import {
   MAX_FINAL_POINT_NUMBERS,
+  MAX_GUESS_LENGTH,
   MAX_LIVE_BATCH_NUMBERS,
   MAX_PLAYERS,
   MAX_ROUND_STROKES,
@@ -185,6 +186,12 @@ export function pickMessage(i) {
   return { v: WIRE_VERSION, t: 'pick', i }
 }
 
+// A guess is free text, but only its length is enforced here; it is normalised
+// and compared server-side and never relayed to anyone else.
+export function guessMessage(text) {
+  return { v: WIRE_VERSION, t: 'guess', text }
+}
+
 export function encode(message) {
   return JSON.stringify(message)
 }
@@ -347,8 +354,17 @@ function parseReveal(p) {
   return { round: p.round, word: p.word, correct: p.correct, skipped: p.skipped }
 }
 
+// The private reply to one guess: only the guesser ever receives it. The ack
+// never carries the guess text or the word.
+function parseGuessAck(p) {
+  if (!p || typeof p.ok !== 'boolean' || typeof p.close !== 'boolean') return null
+  return { ok: p.ok, close: p.close }
+}
+
+const ERROR_REASONS = new Set(['busy', 'guess_cap'])
+
 function parseError(p) {
-  if (!p || p.reason !== 'busy') return null
+  if (!p || !ERROR_REASONS.has(p.reason)) return null
   return { reason: p.reason }
 }
 
@@ -367,6 +383,7 @@ const SERVER_TYPES = Object.freeze({
   word_pick: parseWordPick,
   your_word: parseYourWord,
   reveal: parseReveal,
+  guess_ack: parseGuessAck,
   error: parseError,
 })
 
