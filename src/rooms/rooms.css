@@ -384,3 +384,96 @@
   line-height: 1.45;
   color: #e5484d;
 }
+
+/* ---- game header (v2 Phase 3 step 3) ---- */
+/* A single zone above the paper that is a pure renderer of server frames:
+   the round, the countdown, the hint, and the pick/reveal/scores prompts.
+   It reuses the same surfaces as the rest of the room chrome. */
+.game-header {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  left: 12px;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: calc(100vw - 200px);
+}
+
+.game-header-card {
+  padding: 8px 12px;
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 14px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+
+.game-round {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ui-text);
+  white-space: nowrap;
+}
+
+.game-clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ui-text);
+}
+
+.game-hint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  letter-spacing: 0.18em;
+  color: var(--ui-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.game-note {
+  font-size: 12px;
+  color: var(--ui-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.game-spectate {
+  font-size: 11px;
+  color: var(--ui-muted);
+  opacity: 0.8;
+}
+
+.game-word {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ui-text);
+}
+
+.game-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.game-choice {
+  font: inherit;
+  font-size: 13px;
+  color: var(--ui-text);
+  background: transparent;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.game-choice:hover {
+  border-color: var(--ui-text);
+}
+

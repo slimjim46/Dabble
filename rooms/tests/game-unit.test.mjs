@@ -82,6 +82,29 @@ const PLAYERS = ['u1', 'u2', 'u3']
   check('state: is safe to broadcast', secretsAllowed(state))
 }
 
+// ---- free draw in the lobby: a game start resets every round counter --------
+// The lobby is a free-draw canvas, so its strokes are booked against the same
+// counters and can fill or flag the round partial. starting a game must hand
+// round 1 a clean slate and a fresh storage prefix, or lobby strokes would eat
+// its caps (or make it snapshot as partial).
+{
+  const g = newGameState()
+  // Simulate a heavy lobby that has hit the stroke/point/byte caps.
+  g.seq = 500
+  g.count = 500
+  g.points = 999999
+  g.bytes = 999999
+  g.partial = true
+  check('lobby reset: the lobby round can be full and partial',
+    g.partial === true && g.count === 500)
+
+  startGame(g, PLAYERS, T0, TIMES, ['a', 'b', 'c'])
+  check('lobby reset: round 1 counters are zero after start',
+    g.seq === 0 && g.count === 0 && g.points === 0 && g.bytes === 0, JSON.stringify({ s: g.seq, c: g.count, p: g.points, b: g.bytes }))
+  check('lobby reset: round 1 is not partial after start', g.partial === false)
+  check('lobby reset: the storage prefix moved to the new game', g.gameSeq === 1 && g.round === 1)
+}
+
 // ---- reject / accept picks --------------------------------------------------
 {
   const g = startGame(newGameState(), PLAYERS, T0, TIMES, ['a', 'b', 'c'])

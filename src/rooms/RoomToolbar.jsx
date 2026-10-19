@@ -61,10 +61,6 @@ export default function RoomToolbar({
             </button>
           ))}
         </div>
-
-        <span className="name-pill" title="You">
-          {name}
-        </span>
       </div>
     </div>
   )

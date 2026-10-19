@@ -769,8 +769,39 @@ function sourceCode(rel) {
   check('RoomPaper: does not import the plaza Toolbar',
     !paper.includes("from '../components/Toolbar.jsx'"))
 
+  // B6: the engine must ignore pointer events when disabled, not merely hide
+  // the toolbar. Both the pointerdown entry point and the stroke opener bail
+  // on `disabledRef.current`; if either guard is removed, a read-only viewer
+  // could paint a local line the server would then silently drop.
+  check('RoomPaper: pointerdown is refused while disabled', paper.includes('if (disabledRef.current) return'))
+  check('RoomPaper: the stroke opener is refused while disabled',
+    /startStroke[\s\S]*?if \(disabledRef\.current\) return null/.test(paper))
+  check('RoomPaper: the toolbar is not rendered while disabled',
+    /!disabled && \(/.test(paper) && paper.includes('<RoomToolbar'))
+  check('RoomPaper: the toolbar carries no name prop (the room bar owns the name)',
+    !paper.includes('{name}'))
+
+  const toolbar = sourceCode('src/rooms/RoomToolbar.jsx')
+  check('RoomToolbar: renders no stray name span', !toolbar.includes('{name}'))
+
   const screen = sourceCode('src/rooms/RoomScreen.jsx')
   check('RoomScreen: reads its copy from roomsErrors.js', screen.includes("from './roomsErrors.js'"))
+  // B7: the client draws only for the current drawer while drawing; with no
+  // game running the lobby is a free-draw canvas (matches mayDraw on the server).
+  check('RoomScreen: gates drawing on the drawing phase and the drawer',
+    screen.includes("game.phase === 'drawing' && isDrawer"))
+  check('RoomScreen: allows free drawing with no game running', screen.includes("phase !== 'lobby'"))
+  check('RoomScreen: passes the gate to the paper as `disabled`', screen.includes('disabled={!canDraw}'))
+  check('RoomScreen: shows the next-game note to a mid-game non-drawer',
+    screen.includes('draw in the next game'))
+  check('RoomScreen: the game-over screen has no lobby button',
+    !screen.includes('Back to lobby') && screen.includes('Returning to lobby'))
+  // The countdown must count down from the server's frame, never compare a
+  // server timestamp with the wall clock.
+  check('RoomScreen: the countdown uses performance.now, not Date.now',
+    screen.includes('performance.now()') && !/Countdown[\s\S]*?Date\.now\(/.test(screen))
+  check('RoomScreen: the secret word is only shown when it is our round',
+    screen.includes('yourWord && yourWord.round === game.round'))
 
   const transport = sourceCode('src/rooms/useRoomTransport.js')
   check('transport: flushes points on the shared constant', transport.includes('ROOM_POINT_FLUSH_MS'))
@@ -784,6 +815,13 @@ function sourceCode(rel) {
   check('transport: applies the snapshot frame', transport.includes("case 'snapshot'"))
   check('transport: applies snapshots by diff, never a wholesale replace',
     !transport.includes('replaceAll'))
+  // B7: every game frame the server can send is applied, and the two controls
+  // are sent through the shared builders.
+  for (const frame of ['state', 'word_pick', 'your_word', 'reveal']) {
+    check(`transport: applies the ${frame} frame`, transport.includes(`case '${frame}'`))
+  }
+  check('transport: sends start through the shared builder', transport.includes('startMessage()'))
+  check('transport: sends pick through the shared builder', transport.includes('pickMessage('))
 
   // The round (and later the secret word) lives server-side only: nothing the
   // room client learns may be written to browser storage.

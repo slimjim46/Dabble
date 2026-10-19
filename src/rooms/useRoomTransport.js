@@ -15,7 +15,9 @@ import {
   kickMessage,
   newRoomKey,
   parseRoomMessage,
+  pickMessage,
   probeRoom,
+  startMessage,
   strokeCancelMessage,
   strokeEndMessage,
   strokePointsMessage,
@@ -51,6 +53,14 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
   const [seat, setSeat] = useState(null)
   const [isHost, setIsHost] = useState(false)
   const [kickNotice, setKickNotice] = useState(null)
+  // The server owns the game. The client only renders the latest public state
+  // frame and the two secret frames the drawer alone receives. `game.at` is a
+  // local monotonic stamp so the header countdown never compares a server
+  // timestamp with Date.now() — it counts down from remainingMs on every frame.
+  const [game, setGame] = useState(null)
+  const [wordPick, setWordPick] = useState(null)
+  const [yourWord, setYourWord] = useState(null)
+  const [reveal, setReveal] = useState(null)
 
   const visualRef = useRef(onVisualChange)
   visualRef.current = onVisualChange
@@ -91,6 +101,12 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
           setIsHost(frame.data.host)
           setPlayers(frame.data.players)
           s.playersById = new Map(frame.data.players.map((p) => [p.userId, p]))
+          // A fresh connection has no game context: drop anything the previous
+          // socket left behind (a stale secret must never survive a reconnect).
+          setGame(null)
+          setWordPick(null)
+          setYourWord(null)
+          setReveal(null)
           break
         }
 
@@ -227,6 +243,28 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
 
         case 'kick_err':
           setKickNotice({ ok: false, reason: frame.data.reason, at: Date.now() })
+          break
+
+        // ---- game (v2 Phase 3 step 3) ----------------------------------
+        // The public state frame is the clock: remainingMs + a local monotonic
+        // stamp. `state` arrives on every phase change (and periodically while
+        // drawing), so the header countdown resyncs on each one.
+        case 'state':
+          setGame({ ...frame.data, at: performance.now() })
+          break
+
+        // Drawer-only frames. A non-drawer never receives these; a stale one
+        // from a previous round is ignored by the screen (round is checked).
+        case 'word_pick':
+          setWordPick(frame.data)
+          break
+
+        case 'your_word':
+          setYourWord(frame.data)
+          break
+
+        case 'reveal':
+          setReveal(frame.data)
           break
 
         case 'error':
@@ -402,6 +440,12 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
       kick(userId) {
         send(kickMessage(userId))
       },
+      start() {
+        send(startMessage())
+      },
+      pick(i) {
+        send(pickMessage(i))
+      },
       leave() {
         s.deliberate = true
         s.waitingForOnline = false
@@ -416,6 +460,10 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
         setStatus('idle')
         setReady(false)
         setError(null)
+        setGame(null)
+        setWordPick(null)
+        setYourWord(null)
+        setReveal(null)
       },
       retry() {
         clearTimeout(s.retryTimer)
@@ -502,5 +550,5 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
     return () => clearInterval(timer)
   }, [cursors, store, notify])
 
-  return { api, status, ready, error, players, seat, isHost, kickNotice }
+  return { api, status, ready, error, players, seat, isHost, kickNotice, game, wordPick, yourWord, reveal }
 }

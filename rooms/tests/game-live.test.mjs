@@ -199,7 +199,11 @@ const closeAll = async (conns) => {
   check('B: drawing started before the disconnect', !!drawing)
   const word = wordPick?.options?.[0] ?? null
   await a.close() // the drawer vanishes
-  const rev = await b.waitFor((m) => m.t === 'reveal' && m.round === 1, 10000)
+  // Wait on the event, not a fixed duration: the offer to skip fires after the
+  // drawer grace, but a bug that misses the grace falls through to the round's
+  // own timeout. Give it room for both, then assert the *reason* — skipped must
+  // be true, so a timeout reveal is a real failure rather than a flaky timeout.
+  const rev = await b.waitFor((m) => m.t === 'reveal' && m.round === 1, 25000)
   check('B: the absent drawer skips the round (~3 s grace)', !!rev && rev.skipped === true, JSON.stringify(rev))
   check('B: the already-chosen word is revealed', rev?.word === word, JSON.stringify({ rev: rev?.word, word }))
   check('B: the non-drawer never got a secret frame',
@@ -327,6 +331,67 @@ const closeAll = async (conns) => {
 
   await host.close()
   await peer.close()
+}
+
+// ===========================================================================
+// G. Free draw in the lobby. With no game running the room is a canvas: a
+//    lobby stroke reaches the other player live and is stored (a late joiner's
+//    lobby snapshot contains it). Starting a game must clear that canvas:
+//    round 1 begins blank and unflagged, and its caps are untouched.
+// ===========================================================================
+{
+  const { users, conns, code } = await roomWith(2)
+  const [host, peer] = conns
+
+  // Everyone may draw in the lobby (free-draw canvas, not a dead room). The
+  // other player sees it live, and a late joiner's snapshot contains it.
+  const first = strokeFrames('l1', '11111111-1111-4111-8111-111111111111')
+  host.ws.send(first.start)
+  host.ws.send(first.end)
+  const liveBring = await peer.waitFor(
+    (m) => m.t === 'stroke_end' && m.stroke?.id === '11111111-1111-4111-8111-111111111111', 3000,
+  ).catch(() => null)
+  check('G: a lobby stroke is relayed live to the other player', !!liveBring)
+
+  const lateUser = await anonUser()
+  const late = await connect(code, lateUser.token)
+  const lobbySnap = await late.waitFor(
+    (m) => m.t === 'snapshot' && m.strokes.some((s) => s.id === '11111111-1111-4111-8111-111111111111'), 3000,
+  ).catch(() => null)
+  check('G: a lobby stroke is stored and appears in a late joiner lobby snapshot', !!lobbySnap,
+    JSON.stringify(lobbySnap?.strokes?.map((s) => s.id)))
+  await late.close()
+
+  // Start the game. handleStart clears the lobby prefix before startGame
+  // resets the round state, so round 1 is blank and unflagged.
+  host.ws.send(start)
+  const round1 = await host.waitFor((m) => m.t === 'state' && m.phase === 'pick' && m.round === 1, 8000)
+  check('G: the game started at round 1', !!round1)
+
+  const round1LateUser = await anonUser()
+  const round1Late = await connect(code, round1LateUser.token)
+  const round1Snap = await round1Late.waitFor((m) => m.t === 'snapshot' && m.round === 1, 4000)
+  check('G: round 1 starts blank (lobby strokes cleared)',
+    !!round1Snap && round1Snap.strokes.length === 0, JSON.stringify(round1Snap?.strokes))
+  check('G: round 1 is not partial from lobby strokes', round1Snap?.partial === false,
+    JSON.stringify(round1Snap?.partial))
+  await round1Late.close()
+
+  // Round 1's caps are fresh: the drawer can still store a stroke, and a late
+  // joiner sees it in the round-1 snapshot.
+  const drawer = round1?.drawer === users[0].userId ? host : peer
+  const other = drawer === host ? peer : host
+  await drawer.waitFor((m) => m.t === 'word_pick' && m.round === 1, 5000)
+  drawer.ws.send(pick(0))
+  await drawer.waitFor((m) => m.t === 'state' && m.phase === 'drawing', 5000)
+  const d = strokeFrames('d', '44444444-4444-4444-8444-444444444444')
+  drawer.ws.send(d.start)
+  drawer.ws.send(d.end)
+  const relayed = await other.waitFor((m) => m.t === 'stroke_end' && m.stroke?.id === '44444444-4444-4444-8444-444444444444', 4000)
+  check('G: round 1 accepts a fresh drawer stroke after the lobby strokes', !!relayed,
+    JSON.stringify(other.json().slice(-3)))
+
+  await closeAll(conns)
 }
 
 summary('game-live')

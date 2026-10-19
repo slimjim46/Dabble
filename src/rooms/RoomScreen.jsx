@@ -4,6 +4,7 @@ import { createStrokeStore } from '../engine/strokeStore.js'
 import { loadIdentity } from '../lib/identity.js'
 import { copyText } from './roomsClipboard.js'
 import { RETRYABLE_ERRORS, ROOM_ERROR_COPY } from './roomsErrors.js'
+import { MIN_PLAYERS } from './roomsConfig.js'
 import RoomPaper from './RoomPaper.jsx'
 import { useRoomTransport } from './useRoomTransport.js'
 
@@ -20,13 +21,14 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
   const [kickToast, setKickToast] = useState(null)
   const codeRef = useRef(null)
 
-  const { api, status, ready, error, players, seat, isHost, kickNotice } = useRoomTransport({
-    roomsUrl,
-    code,
-    store,
-    cursors,
-    onVisualChange: () => redrawRef.current(),
-  })
+  const { api, status, ready, error, players, seat, isHost, kickNotice, game, wordPick, yourWord, reveal } =
+    useRoomTransport({
+      roomsUrl,
+      code,
+      store,
+      cursors,
+      onVisualChange: () => redrawRef.current(),
+    })
 
   // The server derives the display name from the player's own `players` row,
   // so once we know which entry is ours, that is the identity the strokes
@@ -37,6 +39,21 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
     const me = seat === null ? null : players.find((p) => p.seat === seat)
     return me ? { id: me.userId, name: me.name } : fallbackIdentity
   }, [players, seat, fallbackIdentity])
+
+  // Our server-side userId, used to tell whether the public `drawer` is us.
+  const myUserId = seat === null ? null : players.find((p) => p.seat === seat)?.userId ?? null
+  const isDrawer = !!game && myUserId !== null && game.drawer === myUserId
+  const drawerName = useMemo(() => {
+    if (!game?.drawer) return null
+    return players.find((p) => p.userId === game.drawer)?.name ?? 'Someone'
+  }, [game, players])
+
+  // Only the drawer paints during a round; with no game running the room is a
+  // free-draw canvas (the plaza stays the lobby). This mirrors the server's
+  // mayDraw exactly: a non-drawer's paper is read-only, and its toolbar is
+  // hidden rather than shown dead.
+  const inGame = !!game && game.phase !== 'lobby'
+  const canDraw = ready && (!inGame || (game.phase === 'drawing' && isDrawer))
 
   useEffect(() => {
     if (!copied) return undefined
@@ -70,8 +87,22 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
         cursors={cursors}
         api={api}
         identity={identity}
-        disabled={!ready}
+        disabled={!canDraw}
         redrawRef={redrawRef}
+      />
+
+      <GameHeader
+        game={game}
+        ready={ready}
+        isHost={isHost}
+        isDrawer={isDrawer}
+        drawerName={drawerName}
+        playerCount={players.length}
+        wordPick={wordPick}
+        yourWord={yourWord}
+        reveal={reveal}
+        onStart={() => api.start()}
+        onPick={(i) => api.pick(i)}
       />
 
       <div className="room-bar">
@@ -189,3 +220,143 @@ function statusLabel(status, ready, error) {
   if (status === 'connecting') return 'Joining'
   return error ? 'Offline' : 'Idle'
 }
+
+/**
+ * The countdown derives everything from the server's `remainingMs` and the
+ * local monotonic clock: it never compares a server timestamp with Date.now()
+ * (clocks disagree), and it resyncs on every state frame. A phase frame
+ * arrives on each transition, so drift stays under a tick.
+ */
+function Countdown({ game }) {
+  const [left, setLeft] = useState(() => remaining(game))
+
+  useEffect(() => {
+    setLeft(remaining(game))
+    if (!game || game.remainingMs <= 0) return undefined
+    const timer = setInterval(() => setLeft(remaining(game)), 250)
+    return () => clearInterval(timer)
+  }, [game])
+
+  if (!game || game.remainingMs <= 0) return null
+  return <span className="game-clock">{Math.ceil(left / 1000)}s</span>
+}
+
+function remaining(game) {
+  if (!game) return 0
+  const elapsed = performance.now() - game.at
+  return Math.max(0, game.remainingMs - elapsed)
+}
+
+/**
+ * The header above the paper. It is a pure renderer of server frames: no
+ * timer authority, no local guessing of the word, and no scores invented in
+ * step 3. `reveal`/`scores` show what the server sent and say the numbers
+ * arrive later.
+ */
+function GameHeader({
+  game,
+  ready,
+  isHost,
+  isDrawer,
+  drawerName,
+  playerCount,
+  wordPick,
+  yourWord,
+  reveal,
+  onStart,
+  onPick,
+}) {
+  if (!ready || !game) return null
+
+  if (game.phase === 'lobby') {
+    return (
+      <div className="game-header">
+        {isHost ? (
+          <button type="button" className="room-primary" disabled={playerCount < MIN_PLAYERS} onClick={onStart}>
+            {playerCount < MIN_PLAYERS ? `Waiting for players (${playerCount}/${MIN_PLAYERS})` : 'Play'}
+          </button>
+        ) : (
+          <span className="game-note">Waiting for the host to start…</span>
+        )}
+      </div>
+    )
+  }
+
+  const roundLabel = `Round ${game.round} / ${game.rounds}`
+
+  if (game.phase === 'pick') {
+    const mine = isDrawer && wordPick && wordPick.round === game.round
+    return (
+      <div className="game-header game-header-card">
+        <span className="game-round">{roundLabel}</span>
+        {mine ? (
+          <>
+            <span className="game-note">Choose a word:</span>
+            <div className="game-choices">
+              {wordPick.options.map((word, i) => (
+                <button key={word} type="button" className="game-choice" onClick={() => onPick(i)}>
+                  {word}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <span className="game-note">{drawerName} is choosing a word…</span>
+        )}
+        <span className="game-spectate">You&rsquo;ll draw in the next game</span>
+      </div>
+    )
+  }
+
+  if (game.phase === 'drawing') {
+    return (
+      <div className="game-header game-header-card">
+        <span className="game-round">{roundLabel}</span>
+        <Countdown game={game} />
+        <span className="game-hint">{game.hint ?? ''}</span>
+        {isDrawer ? (
+          <span className="game-note">
+            Your word: <strong>{yourWord && yourWord.round === game.round ? yourWord.word : '—'}</strong>
+          </span>
+        ) : (
+          <span className="game-note">{drawerName} is drawing</span>
+        )}
+        <span className="game-spectate">You&rsquo;ll draw in the next game</span>
+      </div>
+    )
+  }
+
+  if (game.phase === 'reveal') {
+    const word = reveal && reveal.round === game.round ? reveal.word : null
+    return (
+      <div className="game-header game-header-card">
+        <span className="game-round">{roundLabel}</span>
+        <span className="game-word">{word ?? 'No one drew'}</span>
+        <span className="game-note">Scores arrive in a later update</span>
+      </div>
+    )
+  }
+
+  if (game.phase === 'scores') {
+    const count = game.correct.length
+    return (
+      <div className="game-header game-header-card">
+        <span className="game-round">{roundLabel}</span>
+        <span className="game-note">{count > 0 ? `${count} guessed it` : 'No one guessed it'}</span>
+        <span className="game-note">Scores arrive in a later update</span>
+      </div>
+    )
+  }
+
+  if (game.phase === 'game_over') {
+    return (
+      <div className="game-header game-header-card">
+        <span className="game-note">Returning to lobby…</span>
+        <Countdown game={game} />
+      </div>
+    )
+  }
+
+  return null
+}
+

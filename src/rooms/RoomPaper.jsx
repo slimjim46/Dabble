@@ -383,15 +383,21 @@ export default function RoomPaper({ store, cursors, api, identity, disabled, red
         onPointerCancel={onPointerCancel}
       />
 
-      <RoomToolbar
-        color={color}
-        onColorChange={setColor}
-        brushWidth={brushWidth}
-        onBrushWidthChange={setBrushWidth}
-        ink={ink}
-        inkMax={INK_MAX}
-        inkFlashing={inkFlashing}
-      />
+      {/* Read-only paper (a non-drawer during a round) hides the toolbar
+          entirely rather than showing dead controls. Drawing is already
+          refused by `disabledRef` in the pointer handlers; this only removes
+          the affordance. While it is shown it is fully interactive. */}
+      {!disabled && (
+        <RoomToolbar
+          color={color}
+          onColorChange={setColor}
+          brushWidth={brushWidth}
+          onBrushWidthChange={setBrushWidth}
+          ink={ink}
+          inkMax={INK_MAX}
+          inkFlashing={inkFlashing}
+        />
+      )}
 
       {/* Read-only: the room server derives the display name from the player's
           own `players` row, so a local rename would only disagree with what
