@@ -136,7 +136,7 @@ const timers = []
 for (const { code, drawer, watchers } of rooms) {
   const id = uid()
   const k = randKey()
-  send(code, drawer, { v: 1, t: 'stroke_start', k, id, userId: uid(), userName: 'Load', color: '#0000ff', width: 2, pts: [1, 1] })
+  send(code, drawer, { v: 1, t: 'stroke_start', k, id, userId: uid(), userName: 'Load', color: '#0090ff', width: 2, pts: [1, 1] })
   let seq = 0
   timers.push(
     setInterval(() => {

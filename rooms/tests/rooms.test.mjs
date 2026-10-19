@@ -195,7 +195,7 @@ import { anonUser, check, CODE_RE, connect, createRoom, probeWs, sleep, summary 
       userId: 'attacker',
       userName: 'EVIL',
       country: 'XX',
-      color: '#112233',
+      color: '#e5484d',
       width: 5,
       pts: [10, 20],
     })
@@ -214,7 +214,7 @@ import { anonUser, check, CODE_RE, connect, createRoom, probeWs, sleep, summary 
         id: '0e0a0000-0000-4000-8000-000000000001',
         userId: 'attacker',
         userName: 'EVIL',
-        color: '#112233',
+        color: '#e5484d',
         width: 5,
         points: [10, 20],
       },
@@ -237,11 +237,11 @@ import { anonUser, check, CODE_RE, connect, createRoom, probeWs, sleep, summary 
 
   const S1 = '0e0a0000-0000-4000-8000-000000000011'
   const S2 = '0e0a0000-0000-4000-8000-000000000022'
-  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'c', id: S1, userId: 'x', userName: 'x', color: '#112233', width: 5, pts: [1, 1] }))
+  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'c', id: S1, userId: 'x', userName: 'x', color: '#e5484d', width: 5, pts: [1, 1] }))
   await w.waitFor((m) => m.t === 'stroke_start' && m.id === S1)
 
   // Double-start while S1 is open: dropped.
-  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'c', id: S2, userId: 'x', userName: 'x', color: '#112233', width: 5, pts: [2, 2] }))
+  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'c', id: S2, userId: 'x', userName: 'x', color: '#e5484d', width: 5, pts: [2, 2] }))
   // Points/end/cancel for a stroke this connection never started: dropped.
   a.ws.send(JSON.stringify({ v: 1, t: 'stroke_points', k: 'c', id: S2, seq: 1, pts: [5, 5] }))
   a.ws.send(JSON.stringify({ v: 1, t: 'stroke_cancel', k: 'c', id: S2 }))
@@ -266,6 +266,56 @@ import { anonUser, check, CODE_RE, connect, createRoom, probeWs, sleep, summary 
 
   await a.close()
   await w.close()
+}
+
+// ---- brush id and palette over the wire --------------------------------------
+{
+  const artist = await anonUser()
+  const watcher = await anonUser()
+  const { body } = await createRoom(artist.token)
+  const a = await connect(body.code, artist.token)
+  const w = await connect(body.code, watcher.token)
+
+  const S = '0e0a0000-0000-4000-8000-000000000031'
+  // No brush id sent: the server means "brush 0". An uppercase palette colour
+  // is canonicalised on the way out.
+  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'b', id: S, userId: 'x', userName: 'x', color: '#E5484D', width: 5, pts: [1, 1] }))
+  const started = await w.waitFor((m) => m.t === 'stroke_start' && m.id === S)
+  check('stroke_start relays brush id 0 when absent', started?.b === 0, `b=${JSON.stringify(started?.b)}`)
+  check('stroke_start colour canonicalised to the palette', started?.color === '#e5484d', `color=${JSON.stringify(started?.color)}`)
+
+  // The final stroke carries the brush id too.
+  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_end', k: 'b', stroke: { id: S, userId: 'x', userName: 'x', color: '#e5484d', width: 5, points: [1, 1, 2, 2] } }))
+  const ended = await w.waitFor((m) => m.t === 'stroke_end')
+  check('stroke_end relays brush id 0 when absent', ended?.stroke?.b === 0, `b=${JSON.stringify(ended?.stroke?.b)}`)
+  check('stroke_end colour canonicalised to the palette', ended?.stroke?.color === '#e5484d', `color=${JSON.stringify(ended?.stroke?.color)}`)
+
+  await a.close()
+  await w.close()
+}
+
+// ---- a colour outside the palette is a violation ------------------------------
+{
+  const u = await anonUser()
+  const { body } = await createRoom(u.token)
+  const a = await connect(body.code, u.token)
+  for (let i = 0; i < 20; i++) {
+    a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'c', id: '0e0a0000-0000-4000-8000-000000000041', userId: 'x', userName: 'x', color: '#112233', width: 5, pts: [1, 1] }))
+  }
+  const closed = await a.waitForClose(1008)
+  check('non-palette colour closes with 1008', !!closed, closed ? closed.reason : 'no close')
+}
+
+// ---- a brush id outside BRUSH_IDS is a violation -------------------------------
+{
+  const u = await anonUser()
+  const { body } = await createRoom(u.token)
+  const a = await connect(body.code, u.token)
+  for (let i = 0; i < 20; i++) {
+    a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'c', id: '0e0a0000-0000-4000-8000-000000000051', userId: 'x', userName: 'x', color: '#e5484d', width: 5, b: 1, pts: [1, 1] }))
+  }
+  const closed = await a.waitForClose(1008)
+  check('unknown brush id closes with 1008', !!closed, closed ? closed.reason : 'no close')
 }
 
 // ---- invalid payloads -> violations -> close 1008 ----------------------------
@@ -359,7 +409,7 @@ import { anonUser, check, CODE_RE, connect, createRoom, probeWs, sleep, summary 
   const w = await connect(body.code, watcher.token)
 
   const S = '0e0a0000-0000-4000-8000-000000000033'
-  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'open-at-close', id: S, userId: 'x', userName: 'x', color: '#112233', width: 5, pts: [1, 1] }))
+  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'open-at-close', id: S, userId: 'x', userName: 'x', color: '#e5484d', width: 5, pts: [1, 1] }))
   const started = await w.waitFor((m) => m.t === 'stroke_start' && m.id === S)
   check('watcher sees the stroke start before the close', !!started)
 
@@ -378,7 +428,7 @@ import { anonUser, check, CODE_RE, connect, createRoom, probeWs, sleep, summary 
   const w = await connect(body.code, watcher.token)
 
   const S = '0e0a0000-0000-4000-8000-000000000044'
-  tab1.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'open-at-replace', id: S, userId: 'x', userName: 'x', color: '#112233', width: 5, pts: [2, 2] }))
+  tab1.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'open-at-replace', id: S, userId: 'x', userName: 'x', color: '#e5484d', width: 5, pts: [2, 2] }))
   const started = await w.waitFor((m) => m.t === 'stroke_start' && m.id === S)
   check('watcher sees the stroke start before the replace', !!started)
 
@@ -461,7 +511,7 @@ import { anonUser, check, CODE_RE, connect, createRoom, probeWs, sleep, summary 
   const c = await connect(body.code, target.token)
 
   const S = '0e0a0000-0000-4000-8000-000000000077'
-  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'vk', id: S, userId: 'x', userName: 'x', color: '#112233', width: 5, pts: [1, 1] }))
+  a.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'vk', id: S, userId: 'x', userName: 'x', color: '#e5484d', width: 5, pts: [1, 1] }))
   await b.waitFor((m) => m.t === 'stroke_start' && m.id === S)
   a.ws.send(JSON.stringify({ v: 1, t: 'stroke_points', k: 'vk', id: S, seq: 1, pts: [2, 2] }))
   await b.waitFor((m) => m.t === 'stroke_points' && m.id === S)

@@ -8,24 +8,45 @@
 //    payload: the Room DO overwrites them from the connection's trusted
 //    attachment before anything is broadcast.
 import {
+  BRUSH_IDS,
   MAX_FINAL_POINT_NUMBERS,
   MAX_KEY_LENGTH,
   MAX_LIVE_BATCH_NUMBERS,
   MAX_NAME_LENGTH,
   MAX_STROKE_WIDTH,
   MIN_STROKE_WIDTH,
+  PALETTE,
   PAPER_SIZE,
   WIRE_VERSION,
 } from './config.js'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const HEX_COLOR_RE = /^#[0-9a-f]{6}$/i
 
 const isUuid = (v) => typeof v === 'string' && UUID_RE.test(v)
 const isKey = (v) => typeof v === 'string' && v.length > 0 && v.length <= MAX_KEY_LENGTH
 const isCoord = (v) => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= PAPER_SIZE
 const isName = (v) => typeof v === 'string' && v.length >= 1 && v.length <= MAX_NAME_LENGTH
-const isHex = (v) => typeof v === 'string' && HEX_COLOR_RE.test(v)
+
+// Colours are a closed list, not "any hex string". Accepts any case and
+// returns the canonical lowercase palette entry, so a broadcast colour is
+// always exactly one of PALETTE. See the Open decisions in
+// SPEC-v2-game-platform.md: this has to land before the room client hardcodes
+// the wire format.
+const PALETTE_SET = new Set(PALETTE)
+function isPalette(v) {
+  if (typeof v !== 'string') return null
+  const c = v.toLowerCase()
+  return PALETTE_SET.has(c) ? c : null
+}
+
+// Brush id. Absent means 0 (everyone uses brush 0 for now).
+function isBrushId(v) {
+  return typeof v === 'number' && Number.isInteger(v) && BRUSH_IDS.includes(v)
+}
+function brushOf(p) {
+  const b = p.b === undefined ? 0 : p.b
+  return isBrushId(b) ? b : null
+}
 
 export function isValidFlatPoints(flat, maxNumbers = MAX_FINAL_POINT_NUMBERS) {
   if (!Array.isArray(flat)) return false
@@ -41,8 +62,9 @@ function isValidStrokeShape(stroke) {
   if (!stroke || typeof stroke !== 'object') return false
   if (!isUuid(stroke.id)) return false
   if (!isKey(stroke.userId) || !isName(stroke.userName)) return false
-  if (!isHex(stroke.color)) return false
+  if (!isPalette(stroke.color)) return false
   if (typeof stroke.width !== 'number' || stroke.width < MIN_STROKE_WIDTH || stroke.width > MAX_STROKE_WIDTH) return false
+  if (brushOf(stroke) === null) return false
   if (!isValidFlatPoints(stroke.points, MAX_FINAL_POINT_NUMBERS)) return false
   return true
 }
@@ -63,10 +85,15 @@ export function parseEnvelope(text) {
 export function parseStrokeStart(p) {
   if (!p || !isKey(p.k) || !isUuid(p.id) || !isKey(p.userId)) return null
   if (!isName(p.userName)) return null
-  if (!isHex(p.color)) return null
+  const color = isPalette(p.color)
+  if (!color) return null
   if (typeof p.width !== 'number' || p.width < MIN_STROKE_WIDTH || p.width > MAX_STROKE_WIDTH) return null
   if (!isValidFlatPoints(p.pts, MAX_LIVE_BATCH_NUMBERS) || p.pts.length !== 2) return null
-  return p
+  const b = brushOf(p)
+  if (b === null) return null
+  // Return a copy: the caller may only trust the fields we just checked, and
+  // the colour is canonical.
+  return { ...p, color, b }
 }
 
 export function parseStrokePoints(p) {
@@ -78,7 +105,10 @@ export function parseStrokePoints(p) {
 
 export function parseStrokeEnd(p) {
   if (!p || !isKey(p.k) || !isValidStrokeShape(p.stroke)) return null
-  return p
+  // Canonical colour and a concrete brush id, so the relayed final stroke is
+  // always exactly a palette entry plus a brush id from BRUSH_IDS.
+  const s = p.stroke
+  return { ...p, stroke: { ...s, color: isPalette(s.color), b: brushOf(s) } }
 }
 
 export function parseStrokeCancel(p) {

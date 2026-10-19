@@ -19,7 +19,7 @@ const PLAYERS = 3 // + host = 4 sockets/room (<= dev IP cap of 8)
 const uid = () => crypto.randomUUID()
 const randKey = () => 'k' + Math.random().toString(36).slice(2, 12)
 
-const strokeStart = (id, k) => ({ v: 1, t: 'stroke_start', k, id, userId: uid(), userName: 'Chaos', color: '#ff0000', width: 3, pts: [10, 10] })
+const strokeStart = (id, k) => ({ v: 1, t: 'stroke_start', k, id, userId: uid(), userName: 'Chaos', color: '#30a46c', width: 3, pts: [10, 10] })
 const strokePoints = (id, k, seq, x, y) => ({ v: 1, t: 'stroke_points', k, id, seq, pts: [x, y] })
 const cursor = (k, x, y) => ({ v: 1, t: 'cursor', k, x, y })
 

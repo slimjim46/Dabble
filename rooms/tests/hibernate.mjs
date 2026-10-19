@@ -71,9 +71,9 @@ check('sockets stayed open across the idle window', !closedEarly && !hostConn.cl
 {
   const id = uid()
   const k = randKey()
-  hostConn.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k, id, userId: uid(), userName: 'Hib', color: '#00ff00', width: 2, pts: [1, 1] }))
+  hostConn.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k, id, userId: uid(), userName: 'Hib', color: '#f76b15', width: 2, pts: [1, 1] }))
   hostConn.ws.send(JSON.stringify({ v: 1, t: 'stroke_points', k, id, seq: 1, pts: [2, 2] }))
-  hostConn.ws.send(JSON.stringify({ v: 1, t: 'stroke_end', k, stroke: { id, userId: uid(), userName: 'Hib', color: '#00ff00', width: 2, points: [1, 1, 2, 2] } }))
+  hostConn.ws.send(JSON.stringify({ v: 1, t: 'stroke_end', k, stroke: { id, userId: uid(), userName: 'Hib', color: '#f76b15', width: 2, points: [1, 1, 2, 2] } }))
   const hit = await peerConn.waitFor((m) => m.t === 'stroke_end' && m.k === k, 8000)
   check('full stroke works after hibernation', !!hit)
 }

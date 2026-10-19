@@ -463,7 +463,7 @@ export class Room {
     // are forwarded — a client object is never spread into a broadcast.
     if (env.t === 'stroke_start') {
       this.broadcast(
-        { v: 1, t: 'stroke_start', k: p.k, id: p.id, userId: att.userId, userName: att.name, color: p.color, width: p.width, pts: p.pts },
+        { v: 1, t: 'stroke_start', k: p.k, id: p.id, userId: att.userId, userName: att.name, color: p.color, width: p.width, b: p.b, pts: p.pts },
         ws
       )
       return
@@ -479,7 +479,7 @@ export class Room {
           v: 1,
           t: 'stroke_end',
           k: p.k,
-          stroke: { id: s.id, userId: att.userId, userName: att.name, color: s.color, width: s.width, points: s.points },
+          stroke: { id: s.id, userId: att.userId, userName: att.name, color: s.color, width: s.width, b: s.b, points: s.points },
         },
         ws
       )

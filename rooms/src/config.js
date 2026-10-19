@@ -69,6 +69,26 @@ export const MIN_STROKE_WIDTH = 1
 export const MAX_STROKE_WIDTH = 40
 export const MAX_KEY_LENGTH = 64
 
+// The only colours a stroke may use, in the order the plaza shows them.
+// MUST equal COLORS in src/components/Toolbar.jsx: rooms/tests/wire-unit.test.mjs
+// fails if the two lists drift apart. Matching it server-side (instead of any
+// hex string) also lets us ship unlockable palettes later (v2 Phase 8)
+// without another wire change.
+export const PALETTE = Object.freeze([
+  '#1d1d1f',
+  '#e5484d',
+  '#f76b15',
+  '#f5a623',
+  '#30a46c',
+  '#0090ff',
+  '#8e4ec6',
+  '#e93d82',
+])
+
+// Brush ids on the wire. Everyone uses 0 for now; the list is the thing the
+// client and the server agree on before the room client hardcodes the format.
+export const BRUSH_IDS = Object.freeze([0])
+
 // ---- Per-IP socket cap (pure helpers, unit-tested in Node) ----------------
 // Effective cap: env override (dev load test) or the default above.
 export function maxIpSockets(env = {}) {
