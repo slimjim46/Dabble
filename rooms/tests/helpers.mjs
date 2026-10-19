@@ -120,6 +120,19 @@ export async function createRoom(token, extra = {}, headerExtra = {}) {
 export const CODE_RE = /^[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{5}$/
 
 /**
+ * GET /rooms/<code>/status — the pre-join probe the room client calls before
+ * it opens a socket. Returns {status, body, headers} like createRoom.
+ * @param {string} token omit for the unauthenticated case
+ */
+export async function roomStatus(room, token, headerExtra = {}) {
+  const headers = { 'X-Test-IP': TEST_IP, ...headerExtra }
+  if (token) headers.Authorization = `Bearer ${token}`
+  const res = await fetch(`${TARGET}/rooms/${encodeURIComponent(room)}/status`, { headers })
+  const body = await res.json().catch(() => null)
+  return { status: res.status, body, headers: res.headers }
+}
+
+/**
  * Open a socket or capture the HTTP rejection.
  * @returns {status: 101, ws} or {status, body}
  */

@@ -13,8 +13,10 @@ compatibility_date = "2026-09-01"
 ENVIRONMENT = "dev"
 # Dev Supabase project (Dabble-Dev). Not a secret; the anon key is public.
 SUPABASE_URL = "https://mlynwcajwxmceglgtcat.supabase.co"
-# Comma-separated origins allowed to open sockets / call POST /rooms.
-ALLOWED_ORIGINS = "http://localhost:5173"
+# Comma-separated origins allowed to open sockets / call POST /rooms (and the
+# /rooms/<code>/status probe). Exact match, no wildcards. Dev only: never add
+# a production origin here, it belongs on the production Worker later.
+ALLOWED_ORIGINS = "http://localhost:5173, https://dabble-git-v2-wire-prep-dabble1.vercel.app, https://dabble-git-rooms-client-dabble1.vercel.app"
 # Dev runs the load test from one machine, so the per-IP-per-room socket cap
 # is raised here. The production env does NOT define this override.
 IP_ROOM_SOCKET_LIMIT = "8"

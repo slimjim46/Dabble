@@ -3,7 +3,18 @@
 //
 //   ROOMS_ALLOWED_URL must exactly match the target worker.
 //   node tests/rooms.test.mjs
-import { anonUser, check, CODE_RE, connect, createRoom, probeWs, sleep, summary } from './helpers.mjs'
+import {
+  anonUser,
+  check,
+  CODE_RE,
+  connect,
+  createRoom,
+  probeWs,
+  roomStatus,
+  sleep,
+  summary,
+  TARGET,
+} from './helpers.mjs'
 
 // ---- create + join + welcome + presence ------------------------------------
 {
@@ -527,4 +538,65 @@ import { anonUser, check, CODE_RE, connect, createRoom, probeWs, sleep, summary 
   check('v === 1 on every outbound frame (join/draw/kick/leave)', frames.length > 0 && frames.every((m) => m.v === 1), `${frames.length} frames`)
 }
 
+// ---- pre-join probe: GET /rooms/<code>/status -----------------------------
+// A browser cannot read the HTTP status of a failed WebSocket handshake, so
+// room_full / unknown-room / rooms-busy would be invisible to the client.
+// These are the readable answers, and they must leak nothing.
+{
+  const host = await anonUser()
+  const created = await createRoom(host.token)
+  const code = created.body.code
+
+  const noAuth = await roomStatus(code, null)
+  check('status without a token -> 401', noAuth.status === 401, `${noAuth.status}`)
+
+  const badFormat = await roomStatus('not-a-code!!', host.token)
+  check('malformed code -> 400 bad_room_code', badFormat.status === 400 && badFormat.body?.error === 'bad_room_code')
+
+  const unknown = await roomStatus('QQQQQ', host.token)
+  check('well-formed but unknown room -> 404 not_found', unknown.status === 404 && unknown.body?.error === 'not_found')
+
+  const wrongOrigin = await roomStatus(code, host.token, { Origin: 'https://evil.example' })
+  check('rejected origin -> 403 origin', wrongOrigin.status === 403 && wrongOrigin.body?.error === 'origin')
+
+  const empty = await roomStatus(code, host.token, { Origin: 'http://localhost:5173' })
+  check('empty room -> 200', empty.status === 200, `${empty.status} ${JSON.stringify(empty.body)}`)
+  check('200 body is exactly {players, full}', !!empty.body && JSON.stringify(empty.body) === '{"players":0,"full":false}', JSON.stringify(empty.body))
+  check('200 body carries no identity fields', !JSON.stringify(empty.body).match(/name|userId|user_id|country|seat|host/i))
+
+  // A connected player is visible to a second visitor's probe.
+  const here = await connect(code, host.token)
+  const occupied = await roomStatus(code, (await anonUser()).token, { Origin: 'http://localhost:5173' })
+  check('occupied room -> players: 1, full: false', occupied.status === 200 && occupied.body?.players === 1 && occupied.body?.full === false, JSON.stringify(occupied.body))
+  await here.close()
+
+  // Preflight, because Authorization is not a CORS-safelisted header.
+  const pre = await fetch(`${TARGET}/rooms/${code}/status`, {
+    method: 'OPTIONS',
+    headers: { Origin: 'http://localhost:5173', 'Access-Control-Request-Method': 'GET', 'Access-Control-Request-Headers': 'authorization' },
+  })
+  check('status preflight -> 204', pre.status === 204, `${pre.status}`)
+  check('preflight allows the app origin', pre.headers.get('access-control-allow-origin') === 'http://localhost:5173')
+  check('preflight allows Authorization', (pre.headers.get('access-control-allow-headers') || '').includes('Authorization'))
+  check('preflight allows GET', (pre.headers.get('access-control-allow-methods') || '').includes('GET'))
+}
+
+// ---- pre-join probe: kicked users read 403 ---------------------------------
+{
+  const host = await anonUser()
+  const { body } = await createRoom(host.token)
+  const target = await anonUser()
+  const a = await connect(body.code, host.token)
+  const b = await connect(body.code, target.token)
+  a.ws.send(JSON.stringify({ v: 1, t: 'kick', userId: target.userId }))
+  await a.waitFor((m) => m.t === 'kick_ack' && m.userId === target.userId)
+  await b.waitForClose(4003)
+  await sleep(300)
+
+  const after = await roomStatus(body.code, target.token, { Origin: 'http://localhost:5173' })
+  check('kicked user probing the room -> 403 kicked', after.status === 403 && after.body?.error === 'kicked', `${after.status} ${JSON.stringify(after.body)}`)
+  await a.close()
+}
+
 summary('rooms')
+

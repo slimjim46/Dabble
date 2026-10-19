@@ -43,7 +43,7 @@ function corsHeaders(origin, allowed) {
   if (!origin || !allowed) return {}
   return {
     'access-control-allow-origin': origin,
-    'access-control-allow-methods': 'POST, OPTIONS',
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
     'access-control-allow-headers': 'Authorization, Content-Type',
     'access-control-max-age': '86400',
     vary: 'Origin',
@@ -284,6 +284,84 @@ async function joinRoom(request, env, url) {
   }
 }
 
+/**
+ * GET /rooms/<CODE>/status — the pre-join probe.
+ *
+ * A browser WebSocket cannot read the HTTP status of a failed handshake, so
+ * 429 room_full, 404 unknown room and 503 rooms_busy would be invisible to the
+ * room client. This route answers the same questions with a plain response.
+ * It runs the same gate order and rules as joinRoom (minus the
+ * upgrade-specific steps) so the probe predicts the join instead of
+ * disagreeing with it — and it still counts against the join rate limits,
+ * because it touches a Durable Object. Two deliberate differences:
+ * origin is checked before the token so that *every* error carries CORS
+ * headers (a browser can only read the status if it does), and the code
+ * comes from the path rather than ?room=.
+ * The response body carries only a player count and a full flag: names, ids
+ * and countries belong to the welcome message after a successful upgrade.
+ */
+async function roomStatus(request, env, url) {
+  if (!ipHashSaltOk(env)) {
+    logEvent('prod_salt_missing', { route: 'status' })
+    return roomsBusy('status')
+  }
+
+  // /rooms/<CODE>/status — read the code out of the path segments. joinRoom
+  // gets it from ?room=, so there is no shared helper to reuse. Raw, not
+  // decodeURIComponent: a malformed escape would throw a URIError instead of
+  // returning 400, and room codes never need percent-decoding.
+  const parts = url.pathname.split('/')
+  const code = (parts[2] || '').toUpperCase()
+  if (parts.length !== 4 || parts[3] !== 'status' || !isValidCode(code)) {
+    logEvent('probe_bad_format')
+    return json(400, { error: 'bad_room_code' })
+  }
+
+  const origin = checkOrigin(request, env)
+  const cors = corsHeaders(origin.origin, origin.ok)
+  if (!origin.ok) {
+    logEvent('origin_rejected', { route: 'status' })
+    return json(403, { error: 'origin' }, cors)
+  }
+
+  const token = await readBearer(request)
+  const claims = token ? await verifyAccessToken(token, env) : null
+  if (!claims || typeof claims.sub !== 'string') {
+    logEvent('status_unauth')
+    return json(401, { error: 'unauthorized' }, cors)
+  }
+
+  const ipHash = await clientIpHash(request, env)
+  const allowed = await rateLimitJoin(env, claims.sub, ipHash)
+  if (!allowed) {
+    logEvent('join_rate_limited')
+    return json(429, { error: 'rate_limited' }, { ...cors, 'retry-after': '60' })
+  }
+
+  const identity = await fetchIdentity(claims.sub, token, env)
+  if (identity.banned) {
+    logEvent('banned_reject', { route: 'status' })
+    return json(403, { error: 'banned' }, cors)
+  }
+
+  if (quotaSimulated(env)) return roomsBusy('status')
+
+  try {
+    const stub = env.ROOM.get(env.ROOM.idFromName(code))
+    const res = await stub.fetch('https://room/status', {
+      method: 'GET',
+      headers: ipHash
+        ? { 'X-User': claims.sub, 'X-IP-Hash': ipHash }
+        : { 'X-User': claims.sub },
+    })
+    const body = await res.text()
+    return new Response(body, { status: res.status, headers: { ...JSON_HEADERS, ...cors } })
+  } catch (e) {
+    logEvent('do_fetch_error', { route: 'status', err: errName(e) })
+    return roomsBusy('status')
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
@@ -296,6 +374,16 @@ export default {
         return new Response(null, { status: 204, headers: corsHeaders(origin.origin, true) })
       }
       if (method === 'POST') return createRoom(request, env)
+      return json(405, { error: 'method_not_allowed' })
+    }
+
+    if (url.pathname.startsWith('/rooms/')) {
+      if (method === 'OPTIONS') {
+        const origin = checkOrigin(request, env)
+        if (!origin.ok) return json(403, { error: 'origin' })
+        return new Response(null, { status: 204, headers: corsHeaders(origin.origin, true) })
+      }
+      if (method === 'GET') return roomStatus(request, env, url)
       return json(405, { error: 'method_not_allowed' })
     }
 

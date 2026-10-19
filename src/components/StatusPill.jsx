@@ -1,3 +1,5 @@
+import { roomsEntryHref } from '../lib/roomsEntry.js'
+
 const LABELS = {
   connecting: 'Connecting…',
   reconnecting: 'Reconnecting…',
@@ -6,6 +8,7 @@ const LABELS = {
 
 export default function StatusPill({ status, online, saving, countries, ownerName, ownerUrl, privacyUrl }) {
   const connected = status === 'connected'
+  const roomsHref = roomsEntryHref(import.meta.env)
   const hasStats = typeof countries === 'number'
   const label = connected
     ? hasStats
@@ -40,6 +43,11 @@ export default function StatusPill({ status, online, saving, countries, ownerNam
         {privacyUrl ? (
           <span className="status-footer-item">
             <a href={privacyUrl} target="_blank" rel="noopener noreferrer">about/privacy</a>
+          </span>
+        ) : null}
+        {roomsHref ? (
+          <span className="status-footer-item">
+            <a href={roomsHref} title="Draw together in a private room">Play with friends</a>
           </span>
         ) : null}
       </div>

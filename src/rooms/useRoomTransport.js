@@ -1,0 +1,471 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { decodePoints, quantize } from '../lib/strokeCodec.js'
+import { colorForKey } from '../lib/palette.js'
+import {
+  MAX_FINAL_POINT_NUMBERS,
+  MAX_LIVE_BATCH_NUMBERS,
+  ROOM_CURSOR_FLUSH_MS,
+  ROOM_POINT_FLUSH_MS,
+  nextAfterClose,
+} from './roomsConfig.js'
+import { createRoomsAuth } from './roomsAuth.js'
+import {
+  cursorMessage,
+  encode,
+  kickMessage,
+  newRoomKey,
+  parseRoomMessage,
+  probeRoom,
+  strokeCancelMessage,
+  strokeEndMessage,
+  strokePointsMessage,
+  strokeStartMessage,
+} from './roomsWire.js'
+
+const STALE_LIVE_MS = 15000 // drop an unfinished stroke from someone who vanished
+const OPEN = 1
+
+function socketUrl(roomsUrl, code) {
+  return `${roomsUrl.replace(/^http/, 'ws')}/ws?room=${encodeURIComponent(code)}`
+}
+
+function isOnline() {
+  return typeof navigator === 'undefined' || typeof navigator.onLine !== 'boolean' || navigator.onLine
+}
+
+/**
+ * Everything network-related for one room: the pre-join probe, the socket,
+ * bounded reconnects with a fresh Supabase session on every attempt, the send
+ * budgets the server enforces, and pushing validated frames into the stroke and
+ * cursor stores without touching React state.
+ *
+ * Returns a stable `api` for the drawing code (same shape the plaza's
+ * useRealtimeCanvas exposes, minus persistence) plus the few values the room
+ * chrome renders.
+ */
+export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChange }) {
+  const [status, setStatus] = useState('idle') // idle|connecting|connected|reconnecting|error
+  const [ready, setReady] = useState(false)
+  const [error, setError] = useState(null)
+  const [players, setPlayers] = useState([])
+  const [seat, setSeat] = useState(null)
+  const [isHost, setIsHost] = useState(false)
+  const [kickNotice, setKickNotice] = useState(null)
+
+  const visualRef = useRef(onVisualChange)
+  visualRef.current = onVisualChange
+  const notify = useCallback(() => visualRef.current?.(), [])
+
+  const conn = useRef(null)
+  if (!conn.current) {
+    conn.current = {
+      key: newRoomKey(),
+      socket: null,
+      gen: 0, // which attempt owns the handlers currently registered
+      deliberate: false,
+      live: null, // { id, seq } of our own in-progress stroke
+      pending: [], // flat [x, y, ...] waiting for the next flush
+      cursor: null,
+      cursorDirty: false,
+      seenKeys: new Set(), // k values we already know the identity of
+      keyToUser: new Map(),
+      playerCountry: new Map(),
+      pendingAttempt: 1,
+      retryTimer: 0,
+      waitingForOnline: false,
+    }
+  }
+
+  // ---- auth ----------------------------------------------------------------
+  // Fresh session per attempt, one refresh per readable 401: see roomsAuth.js.
+  const auth = useMemo(() => createRoomsAuth(), [])
+
+  // ---- inbound -------------------------------------------------------------
+  const applyMessage = useCallback(
+    (frame) => {
+      const s = conn.current
+      switch (frame.type) {
+        case 'welcome': {
+          setReady(true)
+          setSeat(frame.data.seat)
+          setIsHost(frame.data.host)
+          setPlayers(frame.data.players)
+          s.playerCountry = new Map(frame.data.players.map((p) => [p.userId, p.country]))
+          break
+        }
+
+        case 'presence': {
+          setPlayers(frame.data.players)
+          const { event, userId } = frame.data
+          s.playerCountry = new Map(frame.data.players.map((p) => [p.userId, p.country]))
+          if (event === 'leave' || event === 'part') {
+            const key = s.keyToUser.get(userId)
+            if (key) {
+              cursors.remove(key)
+              store.endLive(key)
+            }
+          }
+          break
+        }
+
+        case 'stroke_start': {
+          const p = frame.data
+          if (p.k === s.key || store.has(p.id)) return
+          const points = decodePoints(p.pts)
+          const started = store.startLive(p.k, {
+            id: p.id,
+            userId: p.userId,
+            userName: p.userName,
+            color: p.color,
+            width: p.width,
+            points,
+          })
+          if (!started) return
+          s.keyToUser.set(p.k, p.userId)
+          s.seenKeys.add(p.k)
+          cursors.setInfo(p.k, p.userName, colorForKey(p.userId), s.playerCountry.get(p.userId) ?? null)
+          cursors.update(p.k, points[0].x, points[0].y)
+          break
+        }
+
+        case 'stroke_points': {
+          const p = frame.data
+          if (p.k === s.key) return
+          const live = store.getLive(p.k)
+          if (!live || live.id !== p.id || p.seq <= live.seq) return
+          // The server accepts at most MAX_FINAL_POINT_NUMBERS numbers in the
+          // final stroke, so a live one may never grow past half that.
+          if (live.points.length >= MAX_FINAL_POINT_NUMBERS / 2) return
+          const points = decodePoints(p.pts)
+          for (const point of points) live.points.push(point)
+          live.seq = p.seq
+          live.updatedAt = performance.now()
+          const last = points[points.length - 1]
+          cursors.update(p.k, last.x, last.y)
+          break
+        }
+
+        case 'stroke_end': {
+          const p = frame.data
+          if (p.k === s.key) return
+          store.endLive(p.k, p.stroke.id)
+          s.keyToUser.set(p.k, p.stroke.userId)
+          s.seenKeys.add(p.k)
+          cursors.setInfo(
+            p.k,
+            p.stroke.userName,
+            colorForKey(p.stroke.userId),
+            s.playerCountry.get(p.stroke.userId) ?? null,
+          )
+          store.add({
+            id: p.stroke.id,
+            userId: p.stroke.userId,
+            userName: p.stroke.userName,
+            color: p.stroke.color,
+            width: p.stroke.width,
+            points: decodePoints(p.stroke.points),
+          })
+          const last = p.stroke.points
+          if (last.length >= 2) cursors.update(p.k, last[last.length - 2], last[last.length - 1])
+          break
+        }
+
+        case 'stroke_cancel': {
+          const p = frame.data
+          if (p.k === s.key) return
+          store.endLive(p.k, p.id)
+          break
+        }
+
+        case 'cursor': {
+          const p = frame.data
+          if (p.k === s.key) return
+          // The cursor frame carries only the sender's wire key, so a player
+          // who has not drawn yet has no identity on the client. A neutral
+          // colour chip beats inventing a name for them; the label appears
+          // with their first stroke.
+          if (!s.seenKeys.has(p.k)) {
+            s.seenKeys.add(p.k)
+            cursors.setInfo(p.k, '', colorForKey(p.k), null)
+          }
+          cursors.update(p.k, p.x, p.y)
+          break
+        }
+
+        case 'kick_ack':
+          setKickNotice({ ok: true, userId: frame.data.userId, at: Date.now() })
+          break
+
+        case 'kick_err':
+          setKickNotice({ ok: false, reason: frame.data.reason, at: Date.now() })
+          break
+
+        default:
+          return
+      }
+      notify()
+    },
+    [cursors, store, notify],
+  )
+
+  // ---- lifecycle -----------------------------------------------------------
+  const run = useCallback(
+    async (attempt) => {
+      const s = conn.current
+      const gen = ++s.gen
+      s.waitingForOnline = false
+      setStatus(attempt === 1 ? 'connecting' : 'reconnecting')
+      setReady(false)
+      setError(null)
+
+      if (!roomsUrl || !code) return
+      if (!isOnline()) {
+        // Nothing to retry against. Hold here until the 'online' event.
+        s.pendingAttempt = attempt
+        s.waitingForOnline = true
+        return
+      }
+
+      // Never leave a previous attempt's socket alive alongside this one: its
+      // handlers are already invalidated by the generation bump above.
+      const previous = s.socket
+      s.socket = null
+      if (previous && previous.readyState <= 1) {
+        try {
+          previous.close(1000, 'replaced')
+        } catch {}
+      }
+
+      const token = await auth.getToken()
+      if (s.gen !== gen) return
+      if (!token) {
+        setStatus('error')
+        setError('auth')
+        return
+      }
+
+      // Probe first: 404, 429 and 503 are invisible on a WebSocket handshake.
+      const probe = await probeRoom({ roomsUrl, code, auth })
+      if (s.gen !== gen) return
+      if (!probe.ok) {
+        setStatus('error')
+        setError(probe.error)
+        return
+      }
+      if (probe.full) {
+        setStatus('error')
+        setError('full')
+        return
+      }
+
+      let opened = false
+      let ws
+      try {
+        ws = new WebSocket(socketUrl(roomsUrl, code), ['dabble.v1', token])
+      } catch {
+        if (s.gen !== gen) return
+        setStatus('error')
+        setError('join_failed')
+        return
+      }
+
+      s.socket = ws
+      s.deliberate = false
+
+      ws.onopen = () => {
+        if (s.gen !== gen) return
+        opened = true
+        setStatus('connected')
+        setError(null)
+      }
+
+      ws.onmessage = (event) => {
+        if (s.gen !== gen) return
+        const frame = parseRoomMessage(typeof event.data === 'string' ? event.data : '')
+        if (!frame) return // a malformed or unknown frame is dropped, never thrown
+        try {
+          applyMessage(frame)
+        } catch {
+          // A frame that passes validation but breaks the store must not kill
+          // the socket handler.
+        }
+      }
+
+      ws.onclose = (event) => {
+        if (s.gen !== gen) return
+        s.socket = null
+        setReady(false)
+        if (s.live) {
+          s.live = null
+          s.pending = []
+        }
+        if (s.deliberate) {
+          setStatus('idle')
+          setError(null)
+          return
+        }
+        if (!isOnline()) {
+          s.pendingAttempt = attempt
+          s.waitingForOnline = true
+          setStatus('reconnecting')
+          setError(null)
+          return
+        }
+        const outcome = nextAfterClose({ opened, deliberate: false, code: event.code, attempt })
+        setStatus(outcome.status)
+        setError(outcome.error)
+        if (outcome.status === 'reconnecting') {
+          clearTimeout(s.retryTimer)
+          s.pendingAttempt = outcome.attempt
+          s.retryTimer = setTimeout(() => run(outcome.attempt), outcome.delay)
+        }
+      }
+
+      ws.onerror = () => {}
+    },
+    [roomsUrl, code, auth, applyMessage],
+  )
+
+  // ---- send ----------------------------------------------------------------
+  const send = useCallback((message) => {
+    const s = conn.current
+    const ws = s.socket
+    if (!ws || ws.readyState !== OPEN) return
+    try {
+      ws.send(encode(message))
+    } catch {
+      // The close handler runs regardless; nothing useful to do here.
+    }
+  }, [])
+
+  const api = useMemo(() => {
+    const s = conn.current
+    return {
+      strokeStart(stroke) {
+        s.live = { id: stroke.id, seq: 0 }
+        s.pending = []
+        send(strokeStartMessage(s.key, stroke))
+      },
+      strokePoint(point) {
+        if (!s.live) return
+        s.pending.push(quantize(point.x), quantize(point.y))
+      },
+      strokeEnd(stroke) {
+        if (s.live?.id === stroke.id) s.live = null
+        s.pending = []
+        send(strokeEndMessage(s.key, stroke))
+      },
+      strokeCancel(id) {
+        if (s.live?.id === id) s.live = null
+        s.pending = []
+        send(strokeCancelMessage(s.key, id))
+      },
+      cursor(x, y) {
+        s.cursor = { x, y }
+        s.cursorDirty = true
+      },
+      kick(userId) {
+        send(kickMessage(userId))
+      },
+      leave() {
+        s.deliberate = true
+        s.waitingForOnline = false
+        clearTimeout(s.retryTimer)
+        const ws = s.socket
+        if (ws && ws.readyState <= 1) {
+          try {
+            ws.close(1000, 'left')
+          } catch {}
+        }
+        s.socket = null
+        setStatus('idle')
+        setReady(false)
+        setError(null)
+      },
+      retry() {
+        clearTimeout(s.retryTimer)
+        run(1)
+      },
+    }
+  }, [send, run])
+
+  // ---- start / stop --------------------------------------------------------
+  useEffect(() => {
+    if (!roomsUrl || !code) return undefined
+    const s = conn.current
+    let cancelled = false
+    const start = (attempt) => {
+      if (!cancelled) run(attempt)
+    }
+    start(1)
+
+    const onOnline = () => {
+      if (cancelled || !s.waitingForOnline) return
+      clearTimeout(s.retryTimer)
+      start(Math.max(1, s.pendingAttempt))
+    }
+    window.addEventListener('online', onOnline)
+
+    return () => {
+      cancelled = true
+      clearTimeout(s.retryTimer)
+      s.gen += 1 // invalidate every handler still registered
+      s.deliberate = true
+      const ws = s.socket
+      s.socket = null
+      s.live = null
+      s.pending = []
+      if (ws && ws.readyState <= 1) {
+        try {
+          ws.close(1000, 'left')
+        } catch {}
+      }
+      window.removeEventListener('online', onOnline)
+    }
+  }, [roomsUrl, code, run])
+
+  // ---- batching ------------------------------------------------------------
+  // Budgets the server enforces by closing the socket, so these intervals must
+  // stay inside RATE_BUDGET (rooms/src/config.js). See roomsConfig.js.
+  useEffect(() => {
+    const s = conn.current
+    const pointsTimer = setInterval(() => {
+      const ws = s.socket
+      if (!ws || ws.readyState !== OPEN) {
+        s.pending = []
+        return
+      }
+      if (!s.live || s.pending.length === 0) return
+      while (s.pending.length > 0) {
+        const pts = s.pending.splice(0, MAX_LIVE_BATCH_NUMBERS)
+        s.live.seq += 1
+        send(strokePointsMessage(s.key, s.live.id, s.live.seq, pts))
+      }
+    }, ROOM_POINT_FLUSH_MS)
+
+    const cursorTimer = setInterval(() => {
+      // While drawing, the stroke points already say where we are.
+      const ws = s.socket
+      if (!ws || ws.readyState !== OPEN || s.live || !s.cursorDirty || !s.cursor) return
+      s.cursorDirty = false
+      send(cursorMessage(s.key, s.cursor.x, s.cursor.y))
+    }, ROOM_CURSOR_FLUSH_MS)
+
+    return () => {
+      clearInterval(pointsTimer)
+      clearInterval(cursorTimer)
+    }
+  }, [send])
+
+  // ---- housekeeping --------------------------------------------------------
+  useEffect(() => {
+    const timer = setInterval(() => {
+      cursors.prune()
+      const pruned = store.pruneStaleLive(performance.now(), STALE_LIVE_MS)
+      if (pruned || cursors.size > 0) notify()
+    }, 1000)
+    return () => clearInterval(timer)
+  }, [cursors, store, notify])
+
+  return { api, status, ready, error, players, seat, isHost, kickNotice }
+}

@@ -27,6 +27,21 @@ Requires `npm ci` first. `ROOMS_ALLOWED_URL` must equal the target the tests
 connect to (the public dev URL); the guard exists so tests can never be pointed
 at production.
 
+## Deploy (dev only)
+
+```
+set -a; source ../.env; set +a
+npx wrangler deploy --var "SUPABASE_ANON_KEY:$VITE_SUPABASE_ANON_KEY"
+```
+
+`SUPABASE_ANON_KEY` is deliberately not in `wrangler.toml` and is not a
+`wrangler secret`: it is injected per deploy from the shell. **Deploying
+without the `--var` succeeds silently and turns identity off** — `fetchIdentity`
+logs `identity_misconfigured`, every visitor becomes `Guest`, and the banned
+and country checks stop working. Check for `identity_misconfigured` in
+`npx wrangler tail` after any deploy. The value form is `KEY:VALUE` (colon);
+`KEY=VALUE` is accepted by the flag parser and then dropped.
+
 ## Known gaps
 
 Accepted for now; each is a known limitation, not an oversight.

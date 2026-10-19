@@ -266,6 +266,9 @@ export class Room {
     if (isJoin && request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return new Response('upgrade required', { status: 426 })
     }
+    if (request.method === 'GET' && url.pathname === '/status') {
+      return this.probe(await this.load(), userId, request.headers.get('X-IP-Hash'))
+    }
     if (!isJoin) return new Response('not found', { status: 404 })
 
     // Proof the Worker never forwards the JWT: booleans only, never values.
@@ -368,6 +371,33 @@ export class Room {
     this.presence(room, 'join', userId, seat) // others; new socket has welcome
     logEvent('join', { seat, host: userId === room.hostUserId, jwtLike: !!jwtLike, swp: hasProtoHeader ? 1 : 0 })
     return new Response(null, { status: 101, webSocket: client, headers: acceptHeaders })
+  }
+
+  // ---- Pre-join probe ------------------------------------------------------
+  //
+  // A browser WebSocket cannot read the HTTP status of a failed handshake, so
+  // the room client asks for this route first and gets a readable answer.
+  // Deliberately minimal: a connected-player count and a full flag, and
+  // nothing else. No names, user ids, seats or countries ever leave here —
+  // these visitors do not know each other yet, and a pre-join response is the
+  // cheapest place on the server to leak them. This only predicts the join:
+  // the real upgrade re-checks every rule, so a room that fills in between
+  // fails generically on the client.
+  probe(room, userId, ipHash) {
+    const out = (status, body) =>
+      new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
+    if (!room) return out(404, { error: 'not_found' })
+    if (room.blocked[userId]) return out(403, { error: 'kicked' })
+
+    const held = Object.keys(room.seats).length
+    const full = !room.seats[userId] && held >= MAX_PLAYERS
+    if (!full) {
+      const others = this.connectedAtts().filter((a) => a.userId !== userId)
+      if (!ipCapAllows(others, ipHash, maxIpSockets(this.env))) {
+        return out(429, { error: 'too_many_connections' })
+      }
+    }
+    return out(200, { players: this.players(room).length, full })
   }
 
   // ---- Messages ----------------------------------------------------------

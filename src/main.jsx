@@ -4,8 +4,11 @@ import App from './App.jsx'
 import './index.css'
 
 // /admin is a separate page with its own Supabase session (6.5), so its code
-// is split out of the main drawing bundle.
+// is split out of the main drawing bundle. /rooms and /r/<code> are the same
+// story: the room client ships in its own chunk and never loads for a plaza
+// visitor.
 const AdminApp = lazy(() => import('./admin/AdminApp.jsx'))
+const RoomsApp = lazy(() => import('./rooms/RoomsApp.jsx'))
 
 // App-shell service worker (PWA). Registered from here rather than from an
 // inline script in index.html, so the document has no script outside <body>.
@@ -15,13 +18,19 @@ if ('serviceWorker' in navigator) {
   })
 }
 
-const isAdminRoute = window.location.pathname.startsWith('/admin')
+const pathname = window.location.pathname
+const isAdminRoute = pathname.startsWith('/admin')
+const isRoomsRoute = pathname === '/rooms' || pathname.startsWith('/rooms/') || pathname.startsWith('/r/')
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     {isAdminRoute ? (
       <Suspense fallback={<div className="admin-loading">Loading…</div>}>
         <AdminApp />
+      </Suspense>
+    ) : isRoomsRoute ? (
+      <Suspense fallback={<div className="admin-loading">Loading…</div>}>
+        <RoomsApp />
       </Suspense>
     ) : (
       <App />

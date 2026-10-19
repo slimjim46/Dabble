@@ -11,7 +11,10 @@ internet can use it, so assume some visitors are hostile.
 - Frontend: Vite + React, deployed on Vercel. Source in `src/`.
 - Backend: Supabase (Postgres + RLS, anonymous Auth, Realtime Broadcast + Presence).
 - Server code: Vercel Functions in `api/` (to be added in Phase 4).
-- Specs: `SPEC-phases-3-4-6.md`. Do the phases in the order that file gives.
+- v1 (plaza) is SPEC-phases-3-4-6.md; v2 (rooms and games) is
+  SPEC-v2-game-platform.md. The phase numbers overlap, so always say
+  "v1 Phase N" or "v2 Phase N". Read the v2 Status and Design principles
+  before any rooms task.
 
 ### Code map
 
@@ -23,6 +26,7 @@ internet can use it, so assume some visitors are hostile.
 | `src/lib/strokeApi.js`, `src/lib/persistQueue.js` | Database reads/writes, background retry queue |
 | `src/lib/supabase.js` | Client + anonymous auth |
 | `src/engine/*` | Stroke store, cursor store, paper cache, cursor overlay |
+| `src/rooms/*` | v2 room client (`/rooms` and `/r/<code>`); reuses the engine with gestures and undo removed, mirrors `rooms/src/wire.js` |
 | `supabase/` | Migrations (the only way the schema changes) |
 
 ### Invariants that are easy to break
@@ -44,6 +48,10 @@ internet can use it, so assume some visitors are hostile.
 5. **No raw IP addresses are ever stored or logged.** Country code only.
 6. **The canvas must stay fast**: no React state updates per pointer event,
    no per-frame allocations in the draw path.
+7. **The rooms wire has two copies** (client in `src/rooms/roomsWire.js`,
+   server in `rooms/src/wire.js`) that `src/` must not import at build time.
+   Change both in the same commit: `tests/roomClient.test.mjs` runs every
+   message the client can produce through the server's own parsers.
 
 ## Hard rules (never do these)
 
