@@ -792,14 +792,20 @@ function sourceCode(rel) {
     screen.includes("game.phase === 'drawing' && isDrawer"))
   check('RoomScreen: allows free drawing with no game running', screen.includes("phase !== 'lobby'"))
   check('RoomScreen: passes the gate to the paper as `disabled`', screen.includes('disabled={!canDraw}'))
-  check('RoomScreen: shows the next-game note to a mid-game non-drawer',
-    screen.includes('draw in the next game'))
+  check('RoomScreen: no next-game spectator copy is shown to non-drawers',
+    !screen.includes('draw in the next game') && !screen.includes('game-spectate'))
   check('RoomScreen: the game-over screen has no lobby button',
     !screen.includes('Back to lobby') && screen.includes('Returning to lobby'))
-  // The countdown must count down from the server's frame, never compare a
-  // server timestamp with the wall clock.
-  check('RoomScreen: the countdown uses performance.now, not Date.now',
-    screen.includes('performance.now()') && !/Countdown[\s\S]*?Date\.now\(/.test(screen))
+  // The countdown counts down from the server's frame. It uses the larger of
+  // the monotonic delta and the device wall-clock delta (never a server time),
+  // and clamps to the frame's remainingMs, so a clock that freezes while the
+  // device sleeps cannot stall it.
+  check('RoomScreen: the countdown uses performance.now and a local Date.now floor',
+    screen.includes('performance.now()') && screen.includes('Date.now() - game.atWall'))
+  check('RoomScreen: the countdown is clamped to the frame remainingMs',
+    screen.includes('Math.min(game.remainingMs'))
+  check('RoomScreen: the countdown resyncs on visibilitychange',
+    screen.includes("addEventListener('visibilitychange'"))
   check('RoomScreen: the secret word is only shown when it is our round',
     screen.includes('yourWord && yourWord.round === game.round'))
 
@@ -822,6 +828,14 @@ function sourceCode(rel) {
   }
   check('transport: sends start through the shared builder', transport.includes('startMessage()'))
   check('transport: sends pick through the shared builder', transport.includes('pickMessage('))
+  // Returning from a locked screen must reuse the reconnect path, but never
+  // after a fatal close (kicked) and never while already connected.
+  check('transport: resyncs/reconnects on visibilitychange',
+    transport.includes("addEventListener('visibilitychange'"))
+  check('transport: visibility reconnect is gated on status and the fatal flag',
+    transport.includes("s.status === 'connected'") && transport.includes('s.fatal'))
+  check('transport: records the fatal screen from nextAfterClose',
+    transport.includes("s.fatal = outcome.status === 'error'"))
 
   // The round (and later the secret word) lives server-side only: nothing the
   // room client learns may be written to browser storage.

@@ -444,12 +444,6 @@
   text-overflow: ellipsis;
 }
 
-.game-spectate {
-  font-size: 11px;
-  color: var(--ui-muted);
-  opacity: 0.8;
-}
-
 .game-word {
   font-size: 15px;
   font-weight: 600;

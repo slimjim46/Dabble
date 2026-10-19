@@ -83,8 +83,17 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
       pendingAttempt: 1,
       retryTimer: 0,
       waitingForOnline: false,
+      status: 'idle', // mirrors the React status for the visibility handler
+      fatal: false, // a fatal close code was reached: never auto-reconnect
     }
   }
+
+  // Keep the React status and the ref mirror in step so the visibility handler
+  // can read the live status without a stale closure.
+  const applyStatus = useCallback((next) => {
+    conn.current.status = next
+    setStatus(next)
+  }, [])
 
   // ---- auth ----------------------------------------------------------------
   // Fresh session per attempt, one refresh per readable 401: see roomsAuth.js.
@@ -250,7 +259,7 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
         // stamp. `state` arrives on every phase change (and periodically while
         // drawing), so the header countdown resyncs on each one.
         case 'state':
-          setGame({ ...frame.data, at: performance.now() })
+          setGame({ ...frame.data, at: performance.now(), atWall: Date.now() })
           break
 
         // Drawer-only frames. A non-drawer never receives these; a stale one
@@ -287,7 +296,9 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
       const s = conn.current
       const gen = ++s.gen
       s.waitingForOnline = false
-      setStatus(attempt === 1 ? 'connecting' : 'reconnecting')
+      // Starting a fresh attempt means we are no longer on a fatal screen.
+      s.fatal = false
+      applyStatus(attempt === 1 ? 'connecting' : 'reconnecting')
       setReady(false)
       setError(null)
 
@@ -312,7 +323,7 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
       const token = await auth.getToken()
       if (s.gen !== gen) return
       if (!token) {
-        setStatus('error')
+        applyStatus('error')
         setError('auth')
         return
       }
@@ -321,12 +332,12 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
       const probe = await probeRoom({ roomsUrl, code, auth })
       if (s.gen !== gen) return
       if (!probe.ok) {
-        setStatus('error')
+        applyStatus('error')
         setError(probe.error)
         return
       }
       if (probe.full) {
-        setStatus('error')
+        applyStatus('error')
         setError('full')
         return
       }
@@ -337,7 +348,7 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
         ws = new WebSocket(socketUrl(roomsUrl, code), ['dabble.v1', token])
       } catch {
         if (s.gen !== gen) return
-        setStatus('error')
+        applyStatus('error')
         setError('join_failed')
         return
       }
@@ -348,7 +359,7 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
       ws.onopen = () => {
         if (s.gen !== gen) return
         opened = true
-        setStatus('connected')
+        applyStatus('connected')
         setError(null)
       }
 
@@ -373,19 +384,22 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
           s.pending = []
         }
         if (s.deliberate) {
-          setStatus('idle')
+          applyStatus('idle')
           setError(null)
           return
         }
         if (!isOnline()) {
           s.pendingAttempt = attempt
           s.waitingForOnline = true
-          setStatus('reconnecting')
+          applyStatus('reconnecting')
           setError(null)
           return
         }
         const outcome = nextAfterClose({ opened, deliberate: false, code: event.code, attempt })
-        setStatus(outcome.status)
+        // A fatal code (kicked, replaced, expired, policy, too big) is a final
+        // screen: the visibility handler must never auto-retry it.
+        s.fatal = outcome.status === 'error'
+        applyStatus(outcome.status)
         setError(outcome.error)
         if (outcome.status === 'reconnecting') {
           clearTimeout(s.retryTimer)
@@ -396,7 +410,7 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
 
       ws.onerror = () => {}
     },
-    [roomsUrl, code, auth, applyMessage],
+    [roomsUrl, code, auth, applyMessage, applyStatus],
   )
 
   // ---- send ----------------------------------------------------------------
@@ -457,7 +471,8 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
           } catch {}
         }
         s.socket = null
-        setStatus('idle')
+        s.fatal = false
+        applyStatus('idle')
         setReady(false)
         setError(null)
         setGame(null)
@@ -470,7 +485,7 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
         run(1)
       },
     }
-  }, [send, run])
+  }, [send, run, applyStatus])
 
   // ---- start / stop --------------------------------------------------------
   useEffect(() => {
@@ -489,6 +504,22 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
     }
     window.addEventListener('online', onOnline)
 
+    // Returning from a locked/backgrounded screen: if the socket is not up and
+    // this is not a fatal screen, retry the existing reconnect path (fresh
+    // session, shared backoff). A no-op when already connected or when a retry
+    // is already scheduled.
+    const onVisible = () => {
+      if (cancelled || document.visibilityState !== 'visible') return
+      if (s.status === 'connected' || s.fatal) return
+      if (s.retryTimer) return
+      if (!isOnline()) {
+        s.waitingForOnline = true
+        return
+      }
+      start(Math.max(1, s.pendingAttempt))
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
     return () => {
       cancelled = true
       clearTimeout(s.retryTimer)
@@ -504,6 +535,7 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
         } catch {}
       }
       window.removeEventListener('online', onOnline)
+      document.removeEventListener('visibilitychange', onVisible)
     }
   }, [roomsUrl, code, run])
 

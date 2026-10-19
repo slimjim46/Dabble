@@ -223,18 +223,30 @@ function statusLabel(status, ready, error) {
 
 /**
  * The countdown derives everything from the server's `remainingMs` and the
- * local monotonic clock: it never compares a server timestamp with Date.now()
- * (clocks disagree), and it resyncs on every state frame. A phase frame
- * arrives on each transition, so drift stays under a tick.
+ * local clocks: it never compares a server timestamp with Date.now() (clocks
+ * disagree), and it resyncs on every state frame. Elapsed is the larger of the
+ * monotonic delta and the wall-clock delta measured on THIS device, so a clock
+ * that freezes while the device sleeps (iOS Safari) cannot make the countdown
+ * stall. The displayed value is clamped to [0, remainingMs] of the latest
+ * frame. A visibilitychange resync covers the case where the interval was
+ * throttled while the page was hidden.
  */
 function Countdown({ game }) {
   const [left, setLeft] = useState(() => remaining(game))
 
   useEffect(() => {
-    setLeft(remaining(game))
+    const sync = () => setLeft(remaining(game))
+    sync()
     if (!game || game.remainingMs <= 0) return undefined
-    const timer = setInterval(() => setLeft(remaining(game)), 250)
-    return () => clearInterval(timer)
+    const timer = setInterval(sync, 250)
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') sync()
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [game])
 
   if (!game || game.remainingMs <= 0) return null
@@ -243,8 +255,9 @@ function Countdown({ game }) {
 
 function remaining(game) {
   if (!game) return 0
-  const elapsed = performance.now() - game.at
-  return Math.max(0, game.remainingMs - elapsed)
+  const mono = performance.now() - game.at
+  const wall = typeof game.atWall === 'number' ? Date.now() - game.atWall : 0
+  return Math.min(game.remainingMs, Math.max(0, Math.max(mono, wall)))
 }
 
 /**
@@ -303,7 +316,6 @@ function GameHeader({
         ) : (
           <span className="game-note">{drawerName} is choosing a word…</span>
         )}
-        <span className="game-spectate">You&rsquo;ll draw in the next game</span>
       </div>
     )
   }
@@ -321,7 +333,6 @@ function GameHeader({
         ) : (
           <span className="game-note">{drawerName} is drawing</span>
         )}
-        <span className="game-spectate">You&rsquo;ll draw in the next game</span>
       </div>
     )
   }
