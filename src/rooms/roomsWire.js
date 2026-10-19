@@ -13,7 +13,16 @@
 import { MAX_NAME_LENGTH, PAPER_SIZE } from '../lib/constants.js'
 import { BRUSH_IDS, PALETTE } from '../lib/palette.js'
 import { encodePoints, quantize } from '../lib/strokeCodec.js'
-import { MAX_FINAL_POINT_NUMBERS, MAX_LIVE_BATCH_NUMBERS, MAX_PLAYERS, MAX_ROUND_STROKES, ROOM_CODE_RE } from './roomsConfig.js'
+import {
+  MAX_FINAL_POINT_NUMBERS,
+  MAX_LIVE_BATCH_NUMBERS,
+  MAX_PLAYERS,
+  MAX_ROUND_STROKES,
+  MAX_WORD_LENGTH,
+  PHASES,
+  ROOM_CODE_RE,
+  WORD_OPTIONS,
+} from './roomsConfig.js'
 
 export const WIRE_VERSION = 1
 export const MAX_KEY_LENGTH = 64
@@ -166,6 +175,16 @@ export function kickMessage(userId) {
   return { v: WIRE_VERSION, t: 'kick', userId }
 }
 
+// Game controls (v2 Phase 3 step 2). The server owns the game: these carry a
+// choice index only, never a word or an identity.
+export function startMessage() {
+  return { v: WIRE_VERSION, t: 'start' }
+}
+
+export function pickMessage(i) {
+  return { v: WIRE_VERSION, t: 'pick', i }
+}
+
 export function encode(message) {
   return JSON.stringify(message)
 }
@@ -272,6 +291,67 @@ function parseKickErr(p) {
   return { reason: p.reason }
 }
 
+// ---- game frames (v2 Phase 3 step 2) ---------------------------------------
+// The server is the only writer of these; a word is only ever accepted in the
+// frames that are allowed to carry one. Status words are single lowercase
+// tokens today; the pattern leaves room for phrases later.
+const WORD_RE = /^[a-z]+(?: [a-z]+)*$/
+const isWord = (v) => typeof v === 'string' && v.length >= 1 && v.length <= MAX_WORD_LENGTH && WORD_RE.test(v)
+const isUid = (v) => typeof v === 'string' && v.length >= 1 && v.length <= 64
+const PHASE_SET = new Set(PHASES)
+
+function parseState(p) {
+  if (!p || !Number.isInteger(p.round) || p.round < 0) return null
+  if (!Number.isInteger(p.rounds) || p.rounds < 0) return null
+  if (!PHASE_SET.has(p.phase)) return null
+  if (typeof p.remainingMs !== 'number' || !Number.isFinite(p.remainingMs) || p.remainingMs < 0) return null
+  if (p.drawer !== null && !isUid(p.drawer)) return null
+  if (p.wordLen !== null && (!Number.isInteger(p.wordLen) || p.wordLen < 1 || p.wordLen > MAX_WORD_LENGTH)) return null
+  if (p.hint !== null && (typeof p.hint !== 'string' || p.hint.length > MAX_WORD_LENGTH || !/^[a-z_ ]*$/.test(p.hint))) return null
+  if (!p.scores || typeof p.scores !== 'object' || Array.isArray(p.scores)) return null
+  for (const [uid, score] of Object.entries(p.scores)) {
+    if (!isUid(uid) || !Number.isInteger(score)) return null
+  }
+  if (!Array.isArray(p.correct) || p.correct.some((uid) => !isUid(uid))) return null
+  return {
+    round: p.round,
+    rounds: p.rounds,
+    phase: p.phase,
+    remainingMs: p.remainingMs,
+    drawer: p.drawer,
+    wordLen: p.wordLen,
+    hint: p.hint,
+    scores: p.scores,
+    correct: p.correct,
+  }
+}
+
+function parseWordPick(p) {
+  if (!p || !Number.isInteger(p.round) || p.round < 1) return null
+  if (!Array.isArray(p.options) || p.options.length !== WORD_OPTIONS) return null
+  if (!p.options.every(isWord) || new Set(p.options).size !== p.options.length) return null
+  return { round: p.round, options: p.options }
+}
+
+function parseYourWord(p) {
+  if (!p || !Number.isInteger(p.round) || p.round < 1) return null
+  if (!isWord(p.word)) return null
+  return { round: p.round, word: p.word }
+}
+
+function parseReveal(p) {
+  if (!p || !Number.isInteger(p.round) || p.round < 1) return null
+  if (p.word !== null && !isWord(p.word)) return null
+  if (typeof p.skipped !== 'boolean') return null
+  if (!Array.isArray(p.correct) || p.correct.some((uid) => !isUid(uid))) return null
+  return { round: p.round, word: p.word, correct: p.correct, skipped: p.skipped }
+}
+
+function parseError(p) {
+  if (!p || p.reason !== 'busy') return null
+  return { reason: p.reason }
+}
+
 const SERVER_TYPES = Object.freeze({
   welcome: parseWelcome,
   presence: parsePresence,
@@ -283,6 +363,11 @@ const SERVER_TYPES = Object.freeze({
   snapshot: parseSnapshot,
   kick_ack: parseKickAck,
   kick_err: parseKickErr,
+  state: parseState,
+  word_pick: parseWordPick,
+  your_word: parseYourWord,
+  reveal: parseReveal,
+  error: parseError,
 })
 
 /**

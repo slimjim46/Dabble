@@ -229,6 +229,12 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
           setKickNotice({ ok: false, reason: frame.data.reason, at: Date.now() })
           break
 
+        case 'error':
+          // Storage trouble on the server: the game continues in memory. The
+          // screen shows a non-fatal busy notice (step 4 wires the UI).
+          setError(frame.data.reason)
+          break
+
         default:
           return
       }

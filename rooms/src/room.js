@@ -19,16 +19,36 @@ import {
   MAX_ROOM_LIFETIME_MS,
   MAX_ROUND_STROKES,
   MAX_VIOLATIONS,
+  MIN_PLAYERS,
   RATE_BUDGET,
   ROOM_GRACE_MS,
-  ROUND_KEY_PREFIX,
   SEAT_HOLD_MS,
+  STORAGE_NOTICE_COOLDOWN_MS,
+  WORD_OPTIONS,
+  gameTimings,
   ipCapAllows,
   maxIpSockets,
 } from './config.js'
+import {
+  advance,
+  acceptPick,
+  isDrawerPhase,
+  newGameState,
+  revealFrame,
+  secretsAllowed,
+  skipRound,
+  startGame,
+  stateFrame,
+  targetedSecretsAllowed,
+  toLobby,
+  upgradeGameState,
+  wordPickFrame,
+  yourWordFrame,
+} from './game.js'
 import { logEvent } from './log.js'
+import { countRoundPoints, recordRoundStroke, roundFits, roundKey, roundPrefix } from './round.js'
+import { pickWords } from './words.js'
 import { buildSnapshot, CLIENT_TYPES, STROKE_TYPES, parseEnvelope } from './wire.js'
-import { countRoundPoints, newRoundState, recordRoundStroke, roundFits, roundKey } from './round.js'
 
 const OPEN = 1 // WebSocket.OPEN
 
@@ -77,9 +97,9 @@ export class Room {
   async load() {
     if (this.room === null) {
       this.room = (await this.state.storage.get('room')) || null
-      // Rooms created before v2 Phase 3 have no round state; backfill it in
-      // memory (the next save() persists it, and every stroke save does).
-      if (this.room && !this.room.game) this.room.game = newRoundState(1)
+      // Rooms created before v2 Phase 3 (or before step 2) get their missing
+      // game fields backfilled in memory; the next save() persists them.
+      if (this.room) this.room.game = upgradeGameState(this.room.game)
     }
     return this.room
   }
@@ -112,6 +132,12 @@ export class Room {
   }
 
   broadcast(obj, except = null) {
+    // One gate for every public frame: the secret word may only leave in a
+    // reveal. This is a code bug, not hostile input, so log and drop.
+    if (!secretsAllowed(obj)) {
+      logEvent('secret_blocked', { t: obj?.t })
+      return
+    }
     const msg = JSON.stringify(obj)
     let sent = 0
     for (const ws of this.state.getWebSockets()) {
@@ -163,9 +189,35 @@ export class Room {
     if (this.openSocketCount() === 0 && room.lastEmptyAt) {
       deadlines.push(room.lastEmptyAt + this.graceMs())
     }
+    if (room.game?.deadlineAt) deadlines.push(room.game.deadlineAt)
+    if (room.game?.drawerGraceAt) deadlines.push(room.game.drawerGraceAt)
     try {
       await this.state.storage.setAlarm(Math.min(...deadlines))
-    } catch {}
+    } catch {
+      logEvent('alarm_set_failed')
+      this.notifyBusy()
+    }
+  }
+
+  /** Broadcast one `busy` error per cooldown; storage trouble is not fatal. */
+  notifyBusy() {
+    const now = Date.now()
+    if (now - (this.lastBusyAt || 0) < STORAGE_NOTICE_COOLDOWN_MS) return
+    this.lastBusyAt = now
+    this.broadcast({ v: 1, t: 'error', reason: 'busy' })
+    logEvent('busy_notice')
+  }
+
+  /** Save room metadata; a failure is logged/notified but never thrown. */
+  async saveSafe(room) {
+    try {
+      await this.save()
+      return true
+    } catch {
+      logEvent('room_save_failed')
+      this.notifyBusy()
+      return false
+    }
   }
 
   async promoteHost(room, pendingUserId = null) {
@@ -220,7 +272,7 @@ export class Room {
       if (released.some((r) => r.uid === room.hostUserId)) {
         hostChanged = await this.promoteHost(room)
       }
-      await this.save()
+      await this.saveSafe(room)
       for (const r of released) this.presence(room, 'leave', r.uid, r.seat.seat)
       if (hostChanged) this.presence(room, 'host', room.hostUserId, room.seats[room.hostUserId]?.seat ?? null)
       logEvent('seats_released', { n: released.length })
@@ -238,6 +290,7 @@ export class Room {
       return
     }
 
+    await this.gameTick(room, now)
     await this.rearm()
   }
 
@@ -262,7 +315,7 @@ export class Room {
         seats: {},
         blocked: {},
         lastEmptyAt: now, // an unjoined room dies with the empty-room grace
-        game: newRoundState(1),
+        game: newGameState(),
       }
       await this.save()
       await this.rearm()
@@ -346,7 +399,12 @@ export class Room {
     // newcomer's claimedAt is `now`, so existing players keep the host role.
     await this.promoteHost(room, userId)
     room.lastEmptyAt = null // a connection: cancel empty-room grace
-    await this.save()
+    // The drawer coming back inside the grace window keeps the round alive.
+    if (room.game.drawerGraceAt && room.game.drawerUserId === userId && isDrawerPhase(room.game.phase)) {
+      room.game.drawerGraceAt = 0
+      logEvent('drawer_grace_cleared')
+    }
+    await this.saveSafe(room)
     await this.rearm()
 
     const [client, server] = Object.values(new WebSocketPair())
@@ -375,10 +433,20 @@ export class Room {
         players,
       })
     )
-    // Exactly one rule for canvas state: every join, even the first, gets a
-    // snapshot of the current round (usually empty). Sent before the
-    // presence broadcast, so the order on the wire is welcome -> snapshot.
+    // Every join gets the game state and the round, then whatever secret
+    // frame that player is entitled to: word_pick/your_word for the drawer,
+    // the public reveal during reveal/scores. The order on the wire is
+    // welcome -> state -> snapshot -> (secret) -> presence, on every join.
+    const game = room.game
+    server.send(JSON.stringify(stateFrame(game, Date.now())))
     server.send(JSON.stringify(await this.snapshotFrame(room)))
+    if (game.phase === 'pick' && game.drawerUserId === userId && game.options?.length) {
+      server.send(JSON.stringify(wordPickFrame(game)))
+    } else if (game.phase === 'drawing' && game.drawerUserId === userId && game.word) {
+      server.send(JSON.stringify(yourWordFrame(game)))
+    } else if (game.phase === 'reveal' || game.phase === 'scores') {
+      server.send(JSON.stringify(revealFrame(game)))
+    }
     this.presence(room, 'join', userId, seat) // others; new socket has welcome
     logEvent('join', { seat, host: userId === room.hostUserId, jwtLike: !!jwtLike, swp: hasProtoHeader ? 1 : 0 })
     return new Response(null, { status: 101, webSocket: client, headers: acceptHeaders })
@@ -500,6 +568,15 @@ export class Room {
       return
     }
 
+    if (env.t === 'start') {
+      await this.handleStart(room, att, ws)
+      return
+    }
+    if (env.t === 'pick') {
+      await this.handlePick(room, att, p, ws)
+      return
+    }
+
     // Identity is overwritten from the attachment; only whitelisted fields
     // are forwarded — a client object is never spread into a broadcast.
     if (env.t === 'stroke_start') {
@@ -534,6 +611,160 @@ export class Room {
     }
   }
 
+  // ---- Game lifecycle -------------------------------------------------------
+
+  seatedUserIds(room) {
+    return Object.entries(room.seats)
+      .sort((a, b) => a[1].seat - b[1].seat)
+      .map(([uid]) => uid)
+  }
+
+  isConnected(userId) {
+    return !!userId && this.socketsFor(userId).some((ws) => ws.readyState === OPEN)
+  }
+
+  connectedSocket(userId) {
+    return this.socketsFor(userId).find((ws) => ws.readyState === OPEN) || null
+  }
+
+  sendFrame(ws, obj) {
+    if (!ws || ws.readyState !== OPEN) return
+    if (!targetedSecretsAllowed(obj)) {
+      logEvent('secret_blocked', { t: obj?.t })
+      return
+    }
+    try {
+      ws.send(JSON.stringify(obj))
+    } catch {}
+  }
+
+  async handleStart(room, att, ws) {
+    const game = room.game
+    if (att.userId !== room.hostUserId) {
+      logEvent('start_ignored', { reason: 'not_host' })
+      return
+    }
+    if (game.phase !== 'lobby' && game.phase !== 'game_over') {
+      logEvent('start_ignored', { reason: 'phase' })
+      return
+    }
+    const players = this.seatedUserIds(room)
+    if (players.length < MIN_PLAYERS) {
+      logEvent('start_ignored', { reason: 'too_few', players: players.length })
+      return
+    }
+
+    // Clear the previous game's last round first: gameSeq/round change below.
+    await this.clearRoundStrokes(room)
+    startGame(game, players, Date.now(), gameTimings(this.env), pickWords(WORD_OPTIONS))
+    await this.saveSafe(room)
+    await this.rearm()
+    this.broadcast(stateFrame(game, Date.now()))
+    this.sendFrame(ws, wordPickFrame(game))
+    logEvent('game_start', { players: players.length, rounds: game.rounds })
+  }
+
+  async handlePick(room, att, p, ws) {
+    const game = room.game
+    if (game.phase !== 'pick' || att.userId !== game.drawerUserId) {
+      logEvent('pick_ignored', { reason: game.phase !== 'pick' ? 'phase' : 'not_drawer' })
+      return
+    }
+    const word = acceptPick(game, p.i, Date.now(), gameTimings(this.env))
+    if (!word) {
+      logEvent('pick_ignored', { reason: 'invalid' })
+      return
+    }
+    await this.saveSafe(room)
+    await this.rearm()
+    this.broadcast(stateFrame(game, Date.now()))
+    this.sendFrame(ws, yourWordFrame(game))
+    logEvent('word_picked', { round: game.round })
+  }
+
+  /**
+   * One alarm step for the game. Drawer grace wins over the phase deadline so
+   * a vanished drawer never stalls a round. Hints are catch-up steps inside
+   * drawing; every other transition is one step.
+   */
+  async gameTick(room, now) {
+    const game = room.game
+    if (!game || game.phase === 'lobby') return
+    const times = gameTimings(this.env)
+
+    if (Object.keys(room.seats).length < MIN_PLAYERS) {
+      await this.abortGame(room, now)
+      return
+    }
+
+    if (game.drawerGraceAt && now >= game.drawerGraceAt) {
+      game.drawerGraceAt = 0
+      if (!this.isConnected(game.drawerUserId) && isDrawerPhase(game.phase)) {
+        const from = game.phase
+        skipRound(game, now, times)
+        await this.afterGameStep(room, { from, to: game.phase, event: 'drawer_absent' }, times)
+        return
+      }
+    }
+
+    if (!game.deadlineAt || now < game.deadlineAt) return
+
+    const from = game.phase
+    // Clear before advance(): the prefix must be the round being left.
+    if (from === 'scores' && game.round < game.rounds) await this.clearRoundStrokes(room)
+    if (from === 'game_over') await this.clearRoundStrokes(room)
+
+    const res = advance(game, now, times, pickWords(WORD_OPTIONS))
+    await this.afterGameStep(room, res, times)
+  }
+
+  async afterGameStep(room, res, times) {
+    const game = room.game
+    const now = Date.now()
+    // A player who is in the order but not connected still gets a fresh grace
+    // window when their turn starts; if they do not return, the round is
+    // skipped with an empty reveal instead of waiting out the whole phase.
+    if (res.to === 'pick' && !this.isConnected(game.drawerUserId)) {
+      game.drawerGraceAt = now + times.drawerGrace
+    }
+    await this.saveSafe(room)
+    await this.rearm()
+    this.broadcast(stateFrame(game, now))
+    if (res.to === 'reveal') this.broadcast(revealFrame(game))
+    if (res.to === 'drawing' && res.from === 'pick') this.sendFrame(this.connectedSocket(game.drawerUserId), yourWordFrame(game))
+    if (res.to === 'pick' && res.from === 'scores') this.sendFrame(this.connectedSocket(game.drawerUserId), wordPickFrame(game))
+    logEvent('game_phase', { from: res.from, to: res.to, event: res.event, round: game.round })
+  }
+
+  async abortGame(room, now) {
+    const game = room.game
+    if (!game || game.phase === 'lobby') return
+    const from = game.phase
+    await this.clearRoundStrokes(room)
+    toLobby(game)
+    await this.saveSafe(room)
+    await this.rearm()
+    this.broadcast(stateFrame(game, Date.now()))
+    logEvent('game_aborted', { from, seated: Object.keys(room.seats).length })
+  }
+
+  /**
+   * Best-effort clear of one round's keys. Only the round being left is
+   * listed: a failed delete orphans keys under an old prefix, which is far
+   * safer than a stale stroke appearing in the next round. Never deleteAll.
+   */
+  async clearRoundStrokes(room) {
+    const prefix = roundPrefix(room.game.gameSeq, room.game.round)
+    try {
+      const listed = await this.state.storage.list({ prefix })
+      if (listed.size) await this.state.storage.delete([...listed.keys()])
+      logEvent('round_cleared', { n: listed.size })
+    } catch {
+      logEvent('round_clear_failed')
+      this.notifyBusy()
+    }
+  }
+
   // ---- Round storage (rs: keys + snapshot) ---------------------------------
 
   /**
@@ -554,28 +785,21 @@ export class Room {
       if (!state.partial) {
         state.partial = true
         logEvent('round_storage_full', { count: state.count, bytes: state.bytes })
-        try {
-          await this.save()
-        } catch {
-          logEvent('room_save_failed')
-        }
+        await this.saveSafe(room)
       }
       return false
     }
 
     recordRoundStroke(state, bytes, points) // sync: claims the seq before any await
     try {
-      await this.state.storage.put(roundKey(state.seq), stroke)
+      await this.state.storage.put(roundKey(state.gameSeq, state.round, state.seq), stroke)
     } catch {
       state.partial = true
       logEvent('round_store_failed')
+      this.notifyBusy()
       return false
     }
-    try {
-      await this.save()
-    } catch {
-      logEvent('room_save_failed')
-    }
+    await this.saveSafe(room)
     return true
   }
 
@@ -583,7 +807,8 @@ export class Room {
    *  they arrive in paint order; the sort is a cheap defence against a future
    *  key format that would not. */
   async snapshotFrame(room) {
-    const listed = await this.state.storage.list({ prefix: ROUND_KEY_PREFIX, limit: MAX_ROUND_STROKES + 1 })
+    const prefix = roundPrefix(room.game.gameSeq, room.game.round)
+    const listed = await this.state.storage.list({ prefix, limit: MAX_ROUND_STROKES + 1 })
     const entries = [...listed.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
     const stored = entries.map(([, v]) => v)
     const frame = buildSnapshot(room.game.round, room.game.partial, stored)
@@ -636,9 +861,15 @@ export class Room {
     }
     room.blocked[target] = true
     delete room.seats[target] // released immediately: they cannot return
+    // A kicked drawer gets the same grace path as a disconnect; they cannot
+    // reconnect, so the round is skipped when it expires.
+    if (isDrawerPhase(room.game.phase) && room.game.drawerUserId === target) {
+      room.game.drawerGraceAt = Date.now() + gameTimings(this.env).drawerGrace
+    }
     const wasHost = target === room.hostUserId
     const hostChanged = wasHost ? await this.promoteHost(room) : false
-    await this.save()
+    await this.saveSafe(room)
+    await this.rearm()
 
     for (const s of this.socketsFor(target)) {
       try {
@@ -649,6 +880,11 @@ export class Room {
     if (hostChanged) this.presence(room, 'host', room.hostUserId, room.seats[room.hostUserId]?.seat ?? null)
     ws.send(JSON.stringify({ v: 1, t: 'kick_ack', userId: target }))
     logEvent('kick', { host_promoted: hostChanged })
+
+    // A kick that leaves fewer than two seats ends the game immediately.
+    if (Object.keys(room.seats).length < MIN_PLAYERS && room.game.phase !== 'lobby') {
+      await this.abortGame(room, Date.now())
+    }
   }
 
   // ---- Disconnect --------------------------------------------------------
@@ -698,18 +934,26 @@ export class Room {
         // handler runs (the remaining count above already excludes the
         // closing socket).
         seat.heldUntil = Date.now() + this.holdMs()
-        await this.save()
+        await this.saveSafe(room)
         logEvent('seat_held', { until: seat.heldUntil, hold: this.holdMs() })
         this.presence(room, 'part', att.userId, seat.seat)
       } else if (!seat) {
         // Seat already gone (kicked, or released): presence already covered.
         logEvent('disconnect', { held: 0 })
       }
+
+      // The drawer left the table: hold the round for a short grace window,
+      // then skip it. Reconnecting inside the window clears this in fetch().
+      if (seat && isDrawerPhase(room.game.phase) && room.game.drawerUserId === att.userId) {
+        room.game.drawerGraceAt = Date.now() + gameTimings(this.env).drawerGrace
+        await this.saveSafe(room)
+        logEvent('drawer_grace_start')
+      }
     }
 
     if (this.openSocketCount() === 0) {
       room.lastEmptyAt = room.lastEmptyAt || Date.now()
-      await this.save()
+      await this.saveSafe(room)
     }
     await this.rearm()
   }

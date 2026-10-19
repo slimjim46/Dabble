@@ -29,6 +29,15 @@ ROOM_GRACE_MS = "15000"
 # Short seat hold so tests can watch promotion/release; production keeps the
 # config default (2 min) by not defining it.
 SEAT_HOLD_MS = "5000"
+# Short game phases so live tests can walk a whole game; production keeps the
+# config defaults (10 s pick / 60 s drawing / 8 s reveal / 8 s scores / 30 s
+# game over / 10 s drawer grace) by not defining any GAME_* var.
+GAME_PICK_MS = "20000"
+GAME_ROUND_MS = "12000"
+GAME_REVEAL_MS = "3000"
+GAME_SCORES_MS = "3000"
+GAME_OVER_MS = "5000"
+DRAWER_GRACE_MS = "3000"
 # Test double for the daily-quota failure path. Honored only when
 # ENVIRONMENT === "dev"; the production env must never define it.
 # SIMULATE_QUOTA = "1"

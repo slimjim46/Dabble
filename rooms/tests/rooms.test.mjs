@@ -603,7 +603,7 @@ import {
 // disconnects, the open stroke is never stored, caps flag the round partial
 // without stopping the live relay, and cursors carry the sender's userId.
 
-// A. First join: welcome then an empty snapshot, always, in that order.
+// A. First join: welcome, state, then an empty snapshot, always, in that order.
 {
   const u = await anonUser()
   const { body } = await createRoom(u.token)
@@ -614,8 +614,12 @@ import {
     snap?.round === 1 && snap?.partial === false && snap?.strokes?.length === 0,
     JSON.stringify(snap))
   const frames = a.json().map((m) => m.t)
-  check('snapshot: wire order is exactly welcome, then snapshot',
-    frames[0] === 'welcome' && frames[1] === 'snapshot', JSON.stringify(frames.slice(0, 4)))
+  check('snapshot: wire order is exactly welcome, state, then snapshot',
+    frames[0] === 'welcome' && frames[1] === 'state' && frames[2] === 'snapshot',
+    JSON.stringify(frames.slice(0, 4)))
+  check('snapshot: a fresh room state is the lobby at round 1',
+    a.json()[1]?.phase === 'lobby' && a.json()[1]?.round === 1,
+    JSON.stringify(a.json()[1]))
   await a.close()
 }
 

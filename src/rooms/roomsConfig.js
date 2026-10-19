@@ -41,6 +41,15 @@ export const MAX_ROUND_STROKES = 500
 export const MAX_ROUND_POINTS = 20000
 export const MAX_ROUND_BYTES = 256 * 1024
 
+// ---- game state machine (v2 Phase 3 step 2) --------------------------------
+// The client parses these frames now; the game UI arrives in step 4. Must
+// equal PHASES / MIN_PLAYERS / WORD_OPTIONS / MAX_WORD_LENGTH in
+// rooms/src/config.js; tests/roomClient.test.mjs asserts every pair.
+export const PHASES = Object.freeze(['lobby', 'pick', 'drawing', 'reveal', 'scores', 'game_over'])
+export const MIN_PLAYERS = 2
+export const WORD_OPTIONS = 3
+export const MAX_WORD_LENGTH = 40
+
 // ---- reconnect -------------------------------------------------------------
 // A dropped socket is retried with capped exponential backoff; every attempt
 // takes a fresh Supabase session first, because the token may have expired

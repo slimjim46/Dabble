@@ -18,6 +18,7 @@ import {
   PALETTE,
   PAPER_SIZE,
   WIRE_VERSION,
+  WORD_OPTIONS,
 } from './config.js'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -126,6 +127,17 @@ export function parseKick(p) {
   return p
 }
 
+// Game controls (v2 Phase 3 step 2): the server owns everything else.
+export function parseStart(p) {
+  return p && typeof p === 'object' && !Array.isArray(p) ? {} : null
+}
+
+export function parsePick(p) {
+  if (!p || !Number.isInteger(p.i)) return null
+  if (p.i < 0 || p.i >= WORD_OPTIONS) return null
+  return { i: p.i }
+}
+
 // Every event type the DO accepts from clients, with its validator.
 export const CLIENT_TYPES = Object.freeze({
   stroke_start: parseStrokeStart,
@@ -134,6 +146,8 @@ export const CLIENT_TYPES = Object.freeze({
   stroke_cancel: parseStrokeCancel,
   cursor: parseCursor,
   kick: parseKick,
+  start: parseStart,
+  pick: parsePick,
 })
 
 // Types governed by a strict "one open stroke per connection" ownership rule.

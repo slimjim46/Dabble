@@ -117,3 +117,50 @@ export function ipCapAllows(atts, ipHash, limit) {
   for (const a of atts) if (a && a.ipHash === ipHash) used++
   return used < limit
 }
+
+// ---- Game state machine (v2 Phase 3 step 2) --------------------------------
+// Server-only for now: the client parses these frames but shows no game UI
+// until step 4. All timings live here; dev shortens them via env (the same
+// pattern as SEAT_HOLD_MS / ROOM_GRACE_MS) so live tests do not take an hour.
+// Production must not define GAME_* or DRAWER_GRACE_MS.
+export const PHASES = Object.freeze(['lobby', 'pick', 'drawing', 'reveal', 'scores', 'game_over'])
+export const MIN_PLAYERS = 2 // seats held or connected; below this a game aborts
+export const WORD_OPTIONS = 3 // choices shown to the drawer
+export const MAX_WORD_LENGTH = 40
+export const HINT_FRACTIONS = Object.freeze([0.5, 0.75]) // reveal letters, never the whole word
+export const TARGET_ROUNDS = 6 // rounds per game, split evenly over the players
+export const STORAGE_NOTICE_COOLDOWN_MS = 5000 // one busy error per cooldown
+
+// Defaults: 6 rounds x 60 s drawing is ~10 minutes per game.
+export const GAME_TIMING = Object.freeze({
+  pick: 10000,
+  drawing: 60000,
+  reveal: 8000,
+  scores: 8000,
+  gameOver: 30000,
+  drawerGrace: 10000,
+})
+
+const TIMING_ENV = Object.freeze({
+  pick: 'GAME_PICK_MS',
+  drawing: 'GAME_ROUND_MS',
+  reveal: 'GAME_REVEAL_MS',
+  scores: 'GAME_SCORES_MS',
+  gameOver: 'GAME_OVER_MS',
+  drawerGrace: 'DRAWER_GRACE_MS',
+})
+
+/**
+ * Effective phase timings. Dev-only env overrides (tests); production has no
+ * GAME_* vars and always gets GAME_TIMING. Values are clamped so a typo cannot
+ * freeze a game or create a zero-length phase.
+ */
+export function gameTimings(env = {}) {
+  const out = { ...GAME_TIMING }
+  if (env?.ENVIRONMENT !== 'dev') return out
+  for (const [key, name] of Object.entries(TIMING_ENV)) {
+    const n = Number(env[name])
+    if (Number.isFinite(n) && n >= 500 && n <= 60 * 60 * 1000) out[key] = Math.round(n)
+  }
+  return out
+}

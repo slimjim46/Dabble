@@ -17,6 +17,7 @@ import path from 'node:path'
 import { PAPER_SIZE as SERVER_PAPER_SIZE } from '../rooms/src/config.js'
 import * as serverConfig from '../rooms/src/config.js'
 import { CLIENT_TYPES, buildSnapshot, parseEnvelope } from '../rooms/src/wire.js'
+import { acceptPick, advance, newGameState, revealFrame, startGame, stateFrame, wordPickFrame, yourWordFrame } from '../rooms/src/game.js'
 import { MAX_NAME_LENGTH, PAPER_SIZE } from '../src/lib/constants.js'
 import { roomsEntryHref } from '../src/lib/roomsEntry.js'
 import { BRUSH_IDS, PALETTE, DEFAULT_COLOR, colorForKey } from '../src/lib/palette.js'
@@ -29,9 +30,13 @@ import {
   MAX_ROUND_BYTES,
   MAX_ROUND_POINTS,
   MAX_ROUND_STROKES,
+  MAX_WORD_LENGTH,
+  MIN_PLAYERS,
+  PHASES,
   ROOM_CODE_RE,
   ROOM_CURSOR_FLUSH_MS,
   ROOM_POINT_FLUSH_MS,
+  WORD_OPTIONS,
   closeDisposition,
   fatalCloseError,
   isFatalClose,
@@ -50,7 +55,9 @@ import {
   newRoomKey,
   newRoomStrokeId,
   parseRoomMessage,
+  pickMessage,
   probeRoom,
+  startMessage,
   strokeCancelMessage,
   strokeEndMessage,
   strokePointsMessage,
@@ -105,6 +112,8 @@ const outbound = [
   ['stroke_cancel', strokeCancelMessage('k1', UUID)],
   ['cursor', cursorMessage('k1', 123.456, 789.012)],
   ['kick', kickMessage(UUID2)],
+  ['start', startMessage()],
+  ['pick', pickMessage(1)],
 ]
 
 for (const [type, message] of outbound) {
@@ -160,6 +169,40 @@ for (const [type, message] of outbound) {
     JSON.stringify(parsed?.data?.strokes))
 }
 
+{
+  // Game frames the server builds must pass the client's own parsers. The
+  // secret word only ever appears in reveal / targeted drawer frames.
+  const T = { pick: 10000, drawing: 60000, reveal: 8000, scores: 8000, gameOver: 30000, drawerGrace: 10000 }
+  const game = startGame(newGameState(), [UUID, UUID2], 1000, T, ['pizza', 'robot', 'castle'])
+  const state = parseRoomMessage(JSON.stringify(stateFrame(game, 2000)))
+  check('contract: the server state frame parses on the client',
+    state?.type === 'state' && state.data.phase === 'pick' && state.data.round === 1 && state.data.rounds === 6,
+    JSON.stringify(state))
+  check('contract: pick state carries no word (wordLen null)', state?.data?.wordLen === null && state.data.hint === null)
+  const pickFrame = parseRoomMessage(JSON.stringify(wordPickFrame(game)))
+  check('contract: word_pick parses with the exact option count',
+    pickFrame?.type === 'word_pick' && pickFrame.data.options.length === WORD_OPTIONS, JSON.stringify(pickFrame))
+
+  acceptPick(game, 2, 3000, T)
+  const draw = parseRoomMessage(JSON.stringify(stateFrame(game, 4000)))
+  check('contract: drawing state masks the word, exposes length',
+    draw?.data?.phase === 'drawing' && draw.data.wordLen === 'castle'.length && draw.data.hint === '______' &&
+    !JSON.stringify(draw).includes('castle'), JSON.stringify(draw))
+  const your = parseRoomMessage(JSON.stringify(yourWordFrame(game)))
+  check('contract: your_word parses (drawer only)', your?.type === 'your_word' && your.data.word === 'castle', JSON.stringify(your))
+
+  const end = 3000 + T.drawing
+  advance(game, end, T)
+  const rev = parseRoomMessage(JSON.stringify(revealFrame(game)))
+  check('contract: reveal parses and carries the public word',
+    rev?.type === 'reveal' && rev.data.word === 'castle' && rev.data.skipped === false, JSON.stringify(rev))
+
+  const busy = parseRoomMessage(JSON.stringify({ v: 1, t: 'error', reason: 'busy' }))
+  check('contract: the busy error parses and has copy + retry',
+    busy?.type === 'error' && busy.data.reason === 'busy' && !!ROOM_ERROR_COPY.busy && RETRYABLE_ERRORS.includes('busy'),
+    JSON.stringify(busy))
+}
+
 // ===========================================================================
 // 2. Palette drift: src/lib/palette.js <-> rooms/src/config.js <-> Toolbar.jsx
 // ===========================================================================
@@ -208,6 +251,10 @@ for (const [type, message] of outbound) {
     ['MAX_ROUND_STROKES', MAX_ROUND_STROKES, serverConfig.MAX_ROUND_STROKES],
     ['MAX_ROUND_POINTS', MAX_ROUND_POINTS, serverConfig.MAX_ROUND_POINTS],
     ['MAX_ROUND_BYTES', MAX_ROUND_BYTES, serverConfig.MAX_ROUND_BYTES],
+    ['MIN_PLAYERS', MIN_PLAYERS, serverConfig.MIN_PLAYERS],
+    ['WORD_OPTIONS', WORD_OPTIONS, serverConfig.WORD_OPTIONS],
+    ['MAX_WORD_LENGTH', MAX_WORD_LENGTH, serverConfig.MAX_WORD_LENGTH],
+    ['PHASES', JSON.stringify(PHASES), JSON.stringify(serverConfig.PHASES)],
   ]
   for (const [label, a, b] of pairs) {
     check(`constants: ${label} matches the server`, a === b, `client=${a} server=${b}`)
@@ -372,6 +419,19 @@ for (const [type, message] of outbound) {
       v: 1, t: 'snapshot', round: 1, partial: false,
       strokes: new Array(serverConfig.MAX_ROUND_STROKES + 1).fill({ id: UUID, userId: UUID2, userName: 'A', color: '#e5484d', width: 4, points: [1, 1, 2, 2] }),
     })],
+    ['state with an unknown phase', json({ v: 1, t: 'state', round: 1, rounds: 6, phase: 'dance', remainingMs: 1, drawer: null, wordLen: null, hint: null, scores: {}, correct: [] })],
+    ['state with negative remaining', json({ v: 1, t: 'state', round: 1, rounds: 6, phase: 'pick', remainingMs: -1, drawer: null, wordLen: null, hint: null, scores: {}, correct: [] })],
+    ['state with a zero wordLen', json({ v: 1, t: 'state', round: 1, rounds: 6, phase: 'pick', remainingMs: 1, drawer: null, wordLen: 0, hint: null, scores: {}, correct: [] })],
+    ['state with a digit in the hint', json({ v: 1, t: 'state', round: 1, rounds: 6, phase: 'drawing', remainingMs: 1, drawer: UUID, wordLen: 4, hint: 'p1zz_', scores: {}, correct: [] })],
+    ['state with an array for scores', json({ v: 1, t: 'state', round: 1, rounds: 6, phase: 'scores', remainingMs: 1, drawer: null, wordLen: null, hint: null, scores: [], correct: [] })],
+    ['state with a non-numeric score', json({ v: 1, t: 'state', round: 1, rounds: 6, phase: 'scores', remainingMs: 1, drawer: null, wordLen: null, hint: null, scores: { [UUID2]: '10' }, correct: [] })],
+    ['word_pick with the wrong option count', json({ v: 1, t: 'word_pick', round: 1, options: ['apple', 'bird'] })],
+    ['word_pick with duplicates', json({ v: 1, t: 'word_pick', round: 1, options: ['apple', 'apple', 'bird'] })],
+    ['word_pick with an uppercase word', json({ v: 1, t: 'word_pick', round: 1, options: ['Apple', 'bird', 'boat'] })],
+    ['your_word past MAX_WORD_LENGTH', json({ v: 1, t: 'your_word', round: 1, word: 'a'.repeat(MAX_WORD_LENGTH + 1) })],
+    ['reveal with a bad word', json({ v: 1, t: 'reveal', round: 1, word: 'two words!', correct: [], skipped: false })],
+    ['reveal without skipped', json({ v: 1, t: 'reveal', round: 1, word: 'pizza', correct: [] })],
+    ['error with an unknown reason', json({ v: 1, t: 'error', reason: 'explode' })],
   ]
   for (const [label, text] of inboundCases) {
     let out

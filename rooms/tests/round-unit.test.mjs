@@ -3,20 +3,23 @@
 //
 //   node tests/round-unit.test.mjs
 import { MAX_ROUND_BYTES, MAX_ROUND_POINTS, MAX_ROUND_STROKES, ROUND_KEY_PREFIX } from '../src/config.js'
-import { countRoundPoints, newRoundState, recordRoundStroke, roundFits, roundKey } from '../src/round.js'
+import { countRoundPoints, newRoundState, recordRoundStroke, resetRoundState, roundFits, roundKey, roundPrefix } from '../src/round.js'
 import { check, summary } from './helpers.mjs'
 
 // ---- key format ------------------------------------------------------------
 {
-  check('key: prefix is rs:', roundKey(1).startsWith(ROUND_KEY_PREFIX), roundKey(1))
-  check('key: zero-padded to 6 digits', roundKey(7) === 'rs:000007', roundKey(7))
-  check('key: seq 0', roundKey(0) === 'rs:000000', roundKey(0))
+  check('key: prefix starts with rs:', roundKey(2, 3, 7).startsWith(ROUND_KEY_PREFIX), roundKey(2, 3, 7))
+  check('key: game/round scoped', roundKey(2, 3, 7) === 'rs:g2:r3:000007', roundKey(2, 3, 7))
+  check('key: seq 0', roundKey(1, 1, 0) === 'rs:g1:r1:000000', roundKey(1, 1, 0))
+  check('key: prefix groups one round only', roundPrefix(2, 3) === 'rs:g2:r3:', roundPrefix(2, 3))
+  check('key: consecutive rounds never share a prefix', !roundKey(1, 1, 5).startsWith(roundPrefix(1, 2)))
+  check('key: consecutive games never share a prefix', !roundKey(1, 1, 5).startsWith(roundPrefix(2, 1)))
   const keys = []
-  for (let i = 1; i <= MAX_ROUND_STROKES; i++) keys.push(roundKey(i))
+  for (let i = 1; i <= MAX_ROUND_STROKES; i++) keys.push(roundKey(4, 2, i))
   const lexicographic = [...keys].sort()
   check('key: lexicographic order equals insertion order for every legal seq',
     JSON.stringify(keys) === JSON.stringify(lexicographic))
-  check('key: every key fits inside the round cap count', keys.every((k) => k.length === ROUND_KEY_PREFIX.length + 6))
+  check('key: every key fits inside the round cap count', keys.every((k) => k.length === roundPrefix(4, 2).length + 6))
 }
 
 // ---- state ------------------------------------------------------------------
@@ -72,7 +75,7 @@ check('points: 4000 numbers are 2000 points', countRoundPoints(new Array(4000).f
   // (500 x 40 points = MAX_ROUND_POINTS; 500 x 500 B < MAX_ROUND_BYTES).
   while (roundFits(state, 500, 40)) {
     recordRoundStroke(state, 500, 40)
-    keys.push(roundKey(state.seq))
+    keys.push(roundKey(1, 1, state.seq))
     stored++
   }
   check('full round: stops exactly at MAX_ROUND_STROKES', stored === MAX_ROUND_STROKES, String(stored))
@@ -84,6 +87,22 @@ check('points: 4000 numbers are 2000 points', countRoundPoints(new Array(4000).f
   state.partial = true
   check('full round: once partial, nothing fits (the flag is permanent)',
     roundFits(state, 1, 1) === false)
+}
+
+// ---- reset ------------------------------------------------------------------
+{
+  const s = newRoundState(3)
+  s.seq = 9
+  s.count = 8
+  s.points = 700
+  s.bytes = 9000
+  s.partial = true
+  resetRoundState(s, 4)
+  check('reset: keeps the new round and zeroes every counter',
+    s.round === 4 && s.seq === 0 && s.count === 0 && s.points === 0 && s.bytes === 0 && s.partial === false,
+    JSON.stringify(s))
+  resetRoundState(s)
+  check('reset: round defaults to the current one', s.round === 4, String(s.round))
 }
 
 summary('round-unit')
