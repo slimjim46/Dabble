@@ -330,6 +330,10 @@ export default function RoomPaper({ store, cursors, api, identity, disabled, red
     (e) => {
       if (!activeRef.current.has(e.pointerId)) {
         if (e.pointerType === 'mouse') {
+          // A read-only paper (drawing phase, non-drawer) must not spend the
+          // cursor budget: without this a desktop watcher sends ~4 cursors/s
+          // for the whole game. Lobby cursors stay (the lobby is not disabled).
+          if (disabledRef.current) return
           const p = screenToWorld(e.clientX, e.clientY)
           api.cursor(p.x, p.y)
         }

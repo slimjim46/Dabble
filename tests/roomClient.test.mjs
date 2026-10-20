@@ -881,6 +881,20 @@ function sourceCode(rel) {
   check('RoomScreen: private feedback offers only Close!/Not quite',
     screen.includes("ack.close ? 'Close!' : 'Not quite'"))
 
+  // Cursor cost: the hover branch of onPointerMove sends cursors for mouse
+  // pointers only, but must also bail while the paper is disabled (a read-only
+  // round, i.e. any non-drawer) or a desktop watcher spends the cursor budget
+  // for the whole game. Lobby cursors stay (the lobby is not disabled).
+  const roomPaper = sourceCode('src/rooms/RoomPaper.jsx')
+  check('RoomPaper: the hover cursor send is gated on disabledRef',
+    /pointerType === 'mouse'[\s\S]{0,160}disabledRef\.current[\s\S]{0,160}api\.cursor/.test(roomPaper))
+  check('RoomPaper: the hover branch bails before api.cursor when disabled',
+    /if \(disabledRef\.current\) return[\s\S]{0,80}api\.cursor/.test(roomPaper))
+  // Exactly one unguarded send site must not exist: the only api.cursor call
+  // sits after the disabled guard.
+  check('RoomPaper: api.cursor is called once, after the disabled guard',
+    (roomPaper.match(/api\.cursor\(/g) || []).length === 1)
+
   // Rooms UI fixes: one wrapping top row owns the chrome (name, game header,
   // room bar) so the name pill and the header can no longer share the top-left
   // corner; the panel is an overlay-layer dialog and the reconnect banner is
