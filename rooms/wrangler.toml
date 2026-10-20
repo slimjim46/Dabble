@@ -67,6 +67,51 @@ tag = "v1"
 new_sqlite_classes = ["Room", "Limiter"]
 
 # ------------------------------------------------------------------------
+# Dev environment. Same worker as the top level (dabble-rooms-dev); this
+# section exists so `wrangler deploy --env dev` works. A named environment
+# inherits NOTHING from the top level, so vars/bindings/migrations/ratelimits
+# are repeated here deliberately. WARNING: keep in sync with the top-level
+# dev config above. No GAME_* / DRAWER_GRACE_MS: like the top level, this
+# worker runs production timings (phone testing).
+[env.dev]
+name = "dabble-rooms-dev"
+
+[env.dev.vars]
+ENVIRONMENT = "dev"
+SUPABASE_URL = "https://mlyncwajwxmceglgtcat.supabase.co"
+ALLOWED_ORIGINS = "http://localhost:5173, https://dabble-git-v2-wire-prep-dabble1.vercel.app, https://dabble-git-rooms-client-dabble1.vercel.app"
+IP_ROOM_SOCKET_LIMIT = "8"
+MAX_ROOMS_PER_IP_PER_HOUR = "100"
+ROOM_GRACE_MS = "15000"
+SEAT_HOLD_MS = "5000"
+
+[[env.dev.ratelimits]]
+name = "JOIN_USER"
+namespace_id = "2401"
+  [env.dev.ratelimits.simple]
+  limit = 60
+  period = 60
+
+[[env.dev.ratelimits]]
+name = "JOIN_IP"
+namespace_id = "2402"
+  [env.dev.ratelimits.simple]
+  limit = 90
+  period = 60
+
+[[env.dev.durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[env.dev.durable_objects.bindings]]
+name = "LIMITER"
+class_name = "Limiter"
+
+[[env.dev.migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room", "Limiter"]
+
+# ------------------------------------------------------------------------
 # Fast test worker (dev only). It exists so the automated suites can walk a
 # whole game in seconds while dabble-rooms-dev above runs production timings
 # for phone testing.
@@ -112,8 +157,6 @@ name = "dabble-rooms-dev-fast"
 ENVIRONMENT = "dev"
 SUPABASE_URL = "https://mlyncwajwxmceglgtcat.supabase.co"
 ALLOWED_ORIGINS = "http://localhost:5173, https://dabble-git-v2-wire-prep-dabble1.vercel.app, https://dabble-git-rooms-client-dabble1.vercel.app"
-IP_ROOM_SOCKET_LIMIT = "8"
-MAX_ROOMS_PER_IP_PER_HOUR = "100"
 ROOM_GRACE_MS = "15000"
 SEAT_HOLD_MS = "5000"
 GAME_PICK_MS = "6000"

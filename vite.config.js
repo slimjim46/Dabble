@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+
 // Open Graph scrapers do not run JavaScript, so og:image / twitter:image have
 // to be absolute URLs in the built HTML — a relative one is dropped by every
 // scraper that sees it. They can only be absolute if the owner sets
@@ -53,4 +54,9 @@ function openGraphImage() {
 
 export default defineConfig({
   plugins: [react(), openGraphImage()],
+  server: {
+    host: true,
+    port: 5173,
+    allowedHosts: ['.trycloudflare.com'],
+  },
 })
