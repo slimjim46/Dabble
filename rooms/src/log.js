@@ -22,3 +22,26 @@ export function logEvent(name, fields = {}) {
   }
   console.log(JSON.stringify(out))
 }
+
+// Diagnostics-only logger (ALARM_DIAG, dev). Same event-name safety, but
+// numeric fields pass through unchanged even when large (epoch ms, deltas)
+// and string fields are truncated rather than dropped to null — a stack's
+// first line is still an event name, count, or class, never user data.
+// Never call this with tokens, IPs, names, room words, or free-form input.
+const MAX_DIAG_STRING = 200
+
+function diagValue(v) {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (typeof v === 'boolean') return v
+  if (typeof v === 'string') return v.length > MAX_DIAG_STRING ? v.slice(0, MAX_DIAG_STRING) : v
+  return null
+}
+
+export function logDiag(name, fields = {}) {
+  if (!SAFE_VALUE.test(name)) return
+  const out = { e: name, diag: true }
+  for (const [k, v] of Object.entries(fields)) {
+    if (SAFE_VALUE.test(k)) out[k] = diagValue(v)
+  }
+  console.log(JSON.stringify(out))
+}

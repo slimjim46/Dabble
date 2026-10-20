@@ -50,7 +50,7 @@ import {
   wordPickFrame,
   yourWordFrame,
 } from './game.js'
-import { logEvent } from './log.js'
+import { logDiag, logEvent } from './log.js'
 import { countRoundPoints, recordRoundStroke, roundFits, roundKey, roundPrefix } from './round.js'
 import { pickWords } from './words.js'
 import { buildSnapshot, CLIENT_TYPES, STROKE_TYPES, parseEnvelope } from './wire.js'
@@ -78,6 +78,12 @@ export class Room {
     this.state = state
     this.env = env
     this.room = null // lazily loaded; lost on hibernation, reloaded
+    // ALARM_DIAG (dev only): a cold start means the DO was evicted and
+    // re-instantiated. If a late alarm coincides with a do_start just before
+    // it, the lateness is a platform wake, not a wrong stored deadline.
+    if (env?.ALARM_DIAG === 'dev') {
+      logDiag('do_start', { now: Date.now(), room: state.id?.toString?.() || null })
+    }
     // Constructor, NOT fetch(): the runtime keeps auto-responses across
     // hibernation, and a wake-up must never route a literal ping to
     // webSocketMessage.
@@ -203,20 +209,45 @@ export class Room {
     const room = this.room
     if (!room) return
     const now = Date.now()
-    const deadlines = [room.createdAt + MAX_ROOM_LIFETIME_MS]
+    const deadlines = [[room.createdAt + MAX_ROOM_LIFETIME_MS, 'room_lifetime']]
     for (const s of Object.values(room.seats)) {
-      if (s.heldUntil) deadlines.push(s.heldUntil)
+      if (s.heldUntil) deadlines.push([s.heldUntil, 'seat_hold'])
       // A held seat stops blocking an early finish at this earlier deadline,
       // while still keeping its seat: arm the alarm for whichever comes first.
-      if (s.earlyFinishUntil) deadlines.push(s.earlyFinishUntil)
+      if (s.earlyFinishUntil) deadlines.push([s.earlyFinishUntil, 'early_finish'])
     }
     if (this.openSocketCount() === 0 && room.lastEmptyAt) {
-      deadlines.push(room.lastEmptyAt + this.graceMs())
+      deadlines.push([room.lastEmptyAt + this.graceMs(), 'empty_grace'])
     }
-    if (room.game?.deadlineAt) deadlines.push(room.game.deadlineAt)
-    if (room.game?.drawerGraceAt) deadlines.push(room.game.drawerGraceAt)
+    if (room.game?.deadlineAt) deadlines.push([room.game.deadlineAt, 'game_deadline'])
+    if (room.game?.drawerGraceAt) deadlines.push([room.game.drawerGraceAt, 'drawer_grace'])
+
+    let chosen = deadlines[0]
+    for (const d of deadlines) if (d[0] < chosen[0]) chosen = d
+    const [at, src] = chosen
+
+    const diag = this.env?.ALARM_DIAG === 'dev'
+    if (diag) {
+      const prev = this.alarmMeta || null
+      if (!prev || prev.at !== at || prev.src !== src) {
+        logDiag('alarm_set', { now, at, src, prev_at: prev ? prev.at : null, prev_src: prev ? prev.src : null })
+        this.alarmMeta = { at, src }
+        try {
+          await this.state.storage.put('alarmMeta', this.alarmMeta)
+        } catch {}
+      }
+      // Defensive, LOG-ONLY: a deadline already passed AND already armed means
+      // the alarm would re-fire immediately. That is the shape of the
+      // re-armed-past-due loop this fix removes; log it so a regression is
+      // visible. Behavior is unchanged: setAlarm still runs below, because
+      // skipping it could leave the room with no alarm and stall it.
+      if (at <= now && this.alarmMeta && this.alarmMeta.at === at && this.alarmMeta.src === src) {
+        logDiag('alarm_past_due_rearm', { src, at, now })
+      }
+    }
+
     try {
-      await this.state.storage.setAlarm(Math.min(...deadlines))
+      await this.state.storage.setAlarm(at)
     } catch {
       logEvent('alarm_set_failed')
       this.notifyBusy()
@@ -265,11 +296,48 @@ export class Room {
     return true
   }
 
-  async alarm() {
+  async alarm(alarmInfo) {
+    const retryCount = alarmInfo?.retryCount ?? 0
+    const isRetry = alarmInfo?.isRetry === true
+    const alarmInfoPresent = alarmInfo != null
+    try {
+      await this.alarmHandler(retryCount, isRetry, alarmInfoPresent)
+    } catch (err) {
+      // ALARM_DIAG (dev only): a throwing alarm is retried with exponential
+      // backoff (~2+4+8+16 s), which can look like platform lateness. Log and
+      // RETHROW: behavior must not change (the runtime still owns the retry).
+      if (this.env?.ALARM_DIAG === 'dev') {
+        logDiag('alarm_error', {
+          now: Date.now(),
+          message: String(err?.message ?? err),
+          stack: String(err?.stack ?? '').split('\n').slice(0, 3).join(' | '),
+          retryCount,
+        })
+      }
+      throw err
+    }
+  }
+
+  async alarmHandler(retryCount, isRetry, alarmInfoPresent = false) {
     const room = await this.load()
     if (!room) return
     const now = Date.now()
     logEvent('alarm_enter', { now, created: room.createdAt })
+    if (this.env?.ALARM_DIAG === 'dev') {
+      const meta = this.alarmMeta || (await this.state.storage.get('alarmMeta')) || null
+      logDiag('alarm_enter_diag', {
+        now,
+        deadline: meta ? meta.at : null,
+        src: meta ? meta.src : null,
+        lateness_ms: meta ? now - meta.at : null,
+        // The DO is a plain class (not `extends DurableObject`), so the
+        // runtime passes no alarmInfo: retry state is unavailable here. A
+        // throwing attempt still shows up as a preceding alarm_error event.
+        retry_state: alarmInfoPresent ? 'provided' : 'unavailable',
+        retryCount,
+        isRetry,
+      })
+    }
 
     if (now >= room.createdAt + MAX_ROOM_LIFETIME_MS) {
       for (const ws of this.state.getWebSockets()) {
@@ -307,8 +375,23 @@ export class Room {
     // seat. This alarm fires at the earliest such window, so re-check now;
     // a seat whose window has not passed keeps blocking. Covers both a fresh
     // release above and a window expiry with no release.
-    if (released.length || Object.values(room.seats).some((s) => s.earlyFinishUntil && now >= s.earlyFinishUntil)) {
-      await this.endDrawingEarly(room)
+    //
+    // Consume every window that has expired (clear it) BEFORE acting: a window
+    // that has fired must never be re-armed, or rearm() would keep setting a
+    // past timestamp and the alarm would re-fire in a tight loop whenever the
+    // round cannot finish (e.g. a lobby room, or a guesser not yet correct).
+    // If nothing finished the round, persist the clears so a hibernation reload
+    // cannot resurrect the past value.
+    let expiredWindow = false
+    for (const seat of Object.values(room.seats)) {
+      if (seat.earlyFinishUntil && now >= seat.earlyFinishUntil) {
+        seat.earlyFinishUntil = null
+        expiredWindow = true
+      }
+    }
+    if (released.length || expiredWindow) {
+      const finished = await this.endDrawingEarly(room)
+      if (expiredWindow && !finished) await this.saveSafe(room)
     }
 
     // Empty-room grace.

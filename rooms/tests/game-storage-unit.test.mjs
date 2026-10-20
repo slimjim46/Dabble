@@ -707,4 +707,69 @@ async function drawingRoom(seatSpec) {
     snapA.strokes.length === 0 && snapB.strokes.length === 0, JSON.stringify(snapA.strokes))
 }
 
+// ---- expired early-finish window never re-arms a past alarm ----------------
+{
+  // LOBBY room (no drawing round) with a held seat whose early-finish window
+  // has already expired. Nothing can finish, so the old code left
+  // earlyFinishUntil set and rearm() re-armed the past timestamp, and the alarm
+  // re-fired in a tight loop. The fix consumes (clears) the window on the run
+  // it fires, so no past deadline survives.
+  const now = Date.now()
+  const room = {
+    createdAt: now,
+    hostUserId: 'u1',
+    nextSeat: 2,
+    seats: {
+      u1: { seat: 0, claimedAt: 1, heldUntil: null, earlyFinishUntil: null },
+      u2: { seat: 1, claimedAt: 2, heldUntil: now + 60000, earlyFinishUntil: now - 1 },
+    },
+    blocked: {},
+    lastEmptyAt: null,
+    game: { ...newGameState() }, // phase 'lobby'
+  }
+  const { state, room: rm } = await newRoom({ room })
+  const r = await rm.load()
+  state.sockets.push(fakeSocket('u1', { readyState: OPEN })) // one live socket
+  const realNow = Date.now
+  Date.now = () => now
+  try {
+    await rm.alarm()
+  } finally {
+    Date.now = realNow
+  }
+  check('loop: an expired early-finish window is cleared on the run it fires',
+    r.seats.u2.earlyFinishUntil === null, JSON.stringify(r.seats.u2))
+  check('loop: rearm does not leave a past alarm armed',
+    state.lastAlarm === null || state.lastAlarm > now, `lastAlarm=${state.lastAlarm} now=${now}`)
+}
+
+// ---- the round still ends early when the condition becomes true ------------
+{
+  // A drawing round with one held, not-yet-correct guesser whose window has
+  // EXPIRED (so it no longer blocks). The expired-window alarm must clear the
+  // window and leave the round drawing (nothing to finish: the guesser has not
+  // guessed). Then the guesser reconnects and guesses correctly: the round must
+  // still end early via the guess path, not by re-arming the past window.
+  const { room, r, sockets } = await drawingRoom({ d: 'open', u2: 'held' })
+  const now = Date.now()
+  r.seats.u2.earlyFinishUntil = now - 1 // window already expired
+  const realNow = Date.now
+  Date.now = () => now
+  try {
+    await room.alarm()
+  } finally {
+    Date.now = realNow
+  }
+  check('continue: an expired window is cleared even though the round cannot finish',
+    r.seats.u2.earlyFinishUntil === null, JSON.stringify(r.seats.u2))
+  check('continue: the round is still drawing after the expired-window alarm',
+    r.game.phase === 'drawing', r.game.phase)
+
+  // The guesser returns and guesses correctly: the round must end now.
+  const ws = fakeSocket('u2', { readyState: OPEN })
+  room.state.sockets.push(ws)
+  await room.webSocketMessage(ws, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('continue: a correct guess still ends the round early', r.game.phase === 'reveal', r.game.phase)
+}
+
 summary('game-storage-unit')
