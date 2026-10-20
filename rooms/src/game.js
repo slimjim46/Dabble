@@ -11,7 +11,12 @@ import {
   CLOSE_MAX_LENGTH_FOR_DISTANCE_1,
   HINT_FRACTIONS,
   MIN_CLOSE_LENGTH,
+  PERFECT_MIN_GUESSERS,
   PHASES,
+  SCORE_DRAWER_PER_GUESSER,
+  SCORE_GUESS_BASE,
+  SCORE_GUESS_TIME_BONUS,
+  SCORE_PERFECT_BONUS,
   TARGET_ROUNDS,
 } from './config.js'
 import { newRoundState, resetRoundState } from './round.js'
@@ -31,6 +36,10 @@ export function newGameState() {
     correct: [],
     scores: {},
     guessCount: {}, // userId -> accepted guesses this round (per-user cap)
+    roundGains: {}, // userId -> points earned this round (guesser + drawer + perfect)
+    presentAtDrawStart: [], // non-drawer userIds connected when drawing began (perfect-round set)
+    drawingMs: 0, // length of the current drawing phase (time-bonus denominator)
+    perfectApplied: false, // guards the one-time perfect bonus at reveal
     skipped: false,
     phaseStartedAt: 0,
     phaseEndsAt: 0,
@@ -56,6 +65,8 @@ export function upgradeGameState(existing) {
   if (!Array.isArray(game.correct)) game.correct = []
   if (!game.scores || typeof game.scores !== 'object' || Array.isArray(game.scores)) game.scores = {}
   if (!game.guessCount || typeof game.guessCount !== 'object' || Array.isArray(game.guessCount)) game.guessCount = {}
+  if (!game.roundGains || typeof game.roundGains !== 'object' || Array.isArray(game.roundGains)) game.roundGains = {}
+  if (!Array.isArray(game.presentAtDrawStart)) game.presentAtDrawStart = []
   return game
 }
 
@@ -90,6 +101,8 @@ function beginPick(game, round, now, times, options) {
   game.hintAts = []
   game.correct = []
   game.guessCount = {}
+  game.roundGains = {}
+  game.presentAtDrawStart = []
   game.skipped = false
   game.phaseStartedAt = now
   game.phaseEndsAt = now + times.pick
@@ -102,6 +115,7 @@ function beginReveal(game, now, times, skipped) {
   game.hintStep = 0
   game.hintAts = []
   game.skipped = !!skipped
+  applyPerfectBonus(game)
   game.drawerGraceAt = 0
   game.phaseStartedAt = now
   game.phaseEndsAt = now + times.reveal
@@ -133,6 +147,8 @@ function beginDrawing(game, word, now, times) {
   game.phase = 'drawing'
   game.hintStep = 0
   game.hintAts = HINT_FRACTIONS.map((f) => now + Math.round(times.drawing * f))
+  game.drawingMs = times.drawing
+  game.perfectApplied = false
   game.skipped = false
   game.phaseStartedAt = now
   game.phaseEndsAt = now + times.drawing
@@ -235,6 +251,8 @@ export function toLobby(game) {
   game.correct = []
   game.scores = {}
   game.guessCount = {}
+  game.roundGains = {}
+  game.presentAtDrawStart = []
   game.skipped = false
   game.phaseStartedAt = 0
   game.phaseEndsAt = 0
@@ -304,6 +322,7 @@ export function revealFrame(game) {
     word: game.word,
     correct: game.correct,
     skipped: game.skipped,
+    gains: { ...game.roundGains },
   }
 }
 
@@ -405,4 +424,59 @@ export function judgeGuess(word, text) {
   const limit = closeDistanceFor(target.length)
   if (limit > 0 && editDistance(guess, target) <= limit) return { status: 'close' }
   return { status: 'wrong' }
+}
+
+// ---- Scoring (v2 Phase 3 step 4b) ------------------------------------------
+// Points are server-authoritative and applied at the moment they are earned:
+// the guesser's points and the drawer's per-guesser reward go in on a correct
+// guess (inside the caller's save), and only the perfect-round bonus waits for
+// the reveal transition. roundGains mirrors scores for the round, so
+// reveal.gains can show the per-round breakdown and the client needs no maths.
+
+/** Guesser points: a flat base plus a speed bonus scaled by time remaining. */
+export function guessPoints(now, phaseEndsAt, drawingMs) {
+  const total = Number.isFinite(drawingMs) && drawingMs > 0 ? drawingMs : 0
+  const remaining = total > 0 ? Math.max(0, Math.min(total, phaseEndsAt - now)) : 0
+  const bonus = total > 0 ? Math.round(SCORE_GUESS_TIME_BONUS * (remaining / total)) : 0
+  return SCORE_GUESS_BASE + bonus
+}
+
+/**
+ * Award a correct guess: the guesser earns their time-bonused points and the
+ * drawer earns SCORE_DRAWER_PER_GUESSER. Idempotent per (round, user): a user
+ * already counted in `correct` is never awarded twice. Mutates scores and
+ * roundGains; the caller persists (this is the correct-guess saveSafe).
+ */
+export function awardGuess(game, userId, drawerUserId, now) {
+  if (!userId || game.correct.includes(userId)) return 0
+  const points = guessPoints(now, game.phaseEndsAt, game.drawingMs)
+  game.correct.push(userId)
+  addScore(game, userId, points)
+  if (drawerUserId && drawerUserId !== userId) addScore(game, drawerUserId, SCORE_DRAWER_PER_GUESSER)
+  return points
+}
+
+function addScore(game, userId, points) {
+  if (!userId || !Number.isFinite(points) || points === 0) return
+  game.scores[userId] = (game.scores[userId] || 0) + points
+  game.roundGains[userId] = (game.roundGains[userId] || 0) + points
+}
+
+/**
+ * Apply the perfect-round bonus at the reveal transition: the drawer earns
+ * SCORE_PERFECT_BONUS when every non-drawer present at drawing start guessed
+ * correctly and there were at least PERFECT_MIN_GUESSERS of them. Never for a
+ * skipped round. Idempotent via a flag, so a duplicate transition cannot pay
+ * twice.
+ */
+export function applyPerfectBonus(game) {
+  if (game.perfectApplied) return false
+  game.perfectApplied = true
+  if (game.skipped) return false
+  const drawer = game.drawerUserId
+  const eligible = Array.isArray(game.presentAtDrawStart) ? game.presentAtDrawStart : []
+  if (!drawer || eligible.length < PERFECT_MIN_GUESSERS) return false
+  if (!eligible.every((uid) => game.correct.includes(uid))) return false
+  addScore(game, drawer, SCORE_PERFECT_BONUS)
+  return true
 }

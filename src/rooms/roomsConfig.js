@@ -59,6 +59,16 @@ export const MIN_CLOSE_LENGTH = 3
 export const CLOSE_MAX_LENGTH_FOR_DISTANCE_1 = 7
 export const CLOSE_DISTANCE_NEAR = 1
 export const CLOSE_DISTANCE_FAR = 2
+
+// ---- scoring (v2 Phase 3 step 4b) ------------------------------------------
+// Must equal the SCORE_* values in rooms/src/config.js; tests/roomClient.test.mjs
+// asserts each pair. The client only labels gains with these; the server is the
+// sole authority on points.
+export const SCORE_GUESS_BASE = 100
+export const SCORE_GUESS_TIME_BONUS = 400
+export const SCORE_DRAWER_PER_GUESSER = 75
+export const SCORE_PERFECT_BONUS = 100
+export const PERFECT_MIN_GUESSERS = 2
 // The send button is disabled for this long after each guess. 600 ms is ~1.67
 // guesses/s, safely under the server's 2/s guess budget (a 400 ms gap would
 // allow 2.5/s and a fast tapper would be closed 1008). The test asserts it.

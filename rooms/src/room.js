@@ -33,6 +33,7 @@ import {
 import {
   advance,
   acceptPick,
+  awardGuess,
   isDrawerPhase,
   judgeGuess,
   newGameState,
@@ -169,6 +170,21 @@ export class Room {
       .filter((ws) => ws.readyState === OPEN)
       .map((ws) => ws.deserializeAttachment?.())
       .filter(Boolean)
+  }
+
+  // User ids of non-drawer seats with a live socket right now. Deduped (one
+  // user may hold several sockets), and only seats that can actually guess.
+  connectedNonDrawerIds(room) {
+    const drawer = room?.game?.drawerUserId
+    const seen = new Set()
+    for (const ws of this.state.getWebSockets()) {
+      if (ws.readyState !== OPEN) continue
+      const a = ws.deserializeAttachment?.()
+      if (!a || !a.userId || a.seat === null || a.seat === undefined) continue
+      if (a.userId === drawer) continue
+      seen.add(a.userId)
+    }
+    return [...seen]
   }
 
   // Count of live sockets. A socket inside its own webSocketClose is still in
@@ -740,6 +756,10 @@ export class Room {
     if (game.phase !== 'drawing') return ignore('phase')
     if (!att.userId || att.userId === game.drawerUserId) return ignore('drawer')
     if (game.correct.includes(att.userId)) return ignore('already')
+    // The drawing deadline has passed but the alarm has not fired yet (a hint
+    // alarm can lag the true end). The round is over: ignore the guess, but
+    // still spend rate budget and persist the attachment (condition A).
+    if (game.phaseEndsAt && Date.now() >= game.phaseEndsAt) return ignore('ended')
     const text = normaliseGuess(p.text)
     if (text.length === 0) return ignore('empty')
 
@@ -757,7 +777,10 @@ export class Room {
 
     const { status } = judgeGuess(game.word, p.text)
     if (status === 'correct') {
-      game.correct.push(att.userId)
+      // Score first: the guesser's points and the drawer's per-guesser reward
+      // land in scores/roundGains, then the correct-guess save persists both
+      // (no extra row). Idempotent: awardGuess refuses a repeat user.
+      awardGuess(game, att.userId, game.drawerUserId, Date.now())
       // Persist so the correct list survives hibernation or eviction.
       await this.saveSafe(room)
       this.broadcast(stateFrame(game, Date.now()))
@@ -825,6 +848,12 @@ export class Room {
     // gameTick below skips that round at the very next alarm.
     if (res.to === 'pick' && !this.isConnected(game.drawerUserId) && this.drawerSeatHeld(room, game.drawerUserId)) {
       game.drawerGraceAt = now + times.drawerGrace
+    }
+    // Drawing just began: snapshot the non-drawer seats that are connected
+    // right now. This is the perfect-round eligibility set (a mid-round joiner
+    // never counts, even though they may still guess and score).
+    if (res.to === 'drawing') {
+      game.presentAtDrawStart = this.connectedNonDrawerIds(room)
     }
     await this.saveSafe(room)
     await this.rearm()

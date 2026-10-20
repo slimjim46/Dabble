@@ -5,6 +5,7 @@
 //
 //   node tests/game-storage-unit.test.mjs
 import { Room } from '../src/room.js'
+import { SCORE_DRAWER_PER_GUESSER, SCORE_GUESS_BASE } from '../src/config.js'
 import { newGameState, stateFrame } from '../src/game.js'
 import { roundKey } from '../src/round.js'
 import { check, summary } from './helpers.mjs'
@@ -411,6 +412,9 @@ async function newRoom(seed = {}, env = ENV) {
   check('evict: a correct guess is saved before any reload',
     r1.game.correct.includes('u2') && r1.game.guessCount.u2 === 1,
     JSON.stringify({ correct: r1.game.correct, guessCount: r1.game.guessCount }))
+  check('evict: a correct guess scores even with no drawingMs (base only)',
+    r1.game.scores.u2 === SCORE_GUESS_BASE && r1.game.scores.u1 === SCORE_DRAWER_PER_GUESSER,
+    JSON.stringify(r1.game.scores))
   check('evict: the correct guesser gets a private ok ack',
     guesserWs.frames.slice(before).some((f) => f.t === 'guess_ack' && f.ok === true))
 
@@ -422,6 +426,10 @@ async function newRoom(seed = {}, env = ENV) {
     JSON.stringify(r2.game.correct))
   check('evict: the per-user guess count survives eviction', r2.game.guessCount.u2 === 1,
     JSON.stringify(r2.game.guessCount))
+  check('evict: scores and roundGains survive eviction',
+    r2.game.scores.u2 === SCORE_GUESS_BASE && r2.game.scores.u1 === SCORE_DRAWER_PER_GUESSER &&
+    JSON.stringify(r2.game.roundGains) === JSON.stringify(r2.game.scores),
+    JSON.stringify({ scores: r2.game.scores, gains: r2.game.roundGains }))
   const reloadedState = stateFrame(r2.game, Date.now())
   check('evict: the secret word is still masked in the public state after reload',
     reloadedState.phase === 'drawing' && reloadedState.wordLen === 5 &&

@@ -146,6 +146,16 @@ export const CLOSE_MAX_LENGTH_FOR_DISTANCE_1 = 7
 export const CLOSE_DISTANCE_NEAR = 1
 export const CLOSE_DISTANCE_FAR = 2
 
+// ---- Scoring (v2 Phase 3 step 4b) ------------------------------------------
+// Server-authoritative points. Only the guesser's time bonus is mirrored to
+// the client (to label a gain); the drawer bonus and perfect bonus are shown
+// from reveal.gains. Mirrors roomsConfig.js where the client reads a value.
+export const SCORE_GUESS_BASE = 100 // flat points for a correct guess
+export const SCORE_GUESS_TIME_BONUS = 400 // max speed bonus, scaled by time left
+export const SCORE_DRAWER_PER_GUESSER = 75 // drawer earns this per correct guesser
+export const SCORE_PERFECT_BONUS = 100 // drawer bonus when every non-drawer present at drawing start guessed
+export const PERFECT_MIN_GUESSERS = 2 // a perfect round needs at least this many eligible guessers
+
 // Defaults: 6 rounds x 75 s drawing is ~10-13 minutes per game (see the N table
 // in tests/game-unit.test.mjs). 75 s sits inside the spec's 60-80 s range so a
 // normal round feels like production on the phone-testing worker, which runs

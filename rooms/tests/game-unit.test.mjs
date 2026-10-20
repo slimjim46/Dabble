@@ -2,11 +2,14 @@
 // hints, the secret gate and the public frames. Pure, no network.
 //
 //   node tests/game-unit.test.mjs
-import { GAME_TIMING, HINT_FRACTIONS, PHASES, TARGET_ROUNDS, WORD_OPTIONS, gameTimings } from '../src/config.js'
+import { GAME_TIMING, HINT_FRACTIONS, PHASES, SCORE_DRAWER_PER_GUESSER, SCORE_GUESS_BASE, SCORE_GUESS_TIME_BONUS, SCORE_PERFECT_BONUS, TARGET_ROUNDS, WORD_OPTIONS, gameTimings } from '../src/config.js'
 import {
   acceptPick,
   advance,
+  applyPerfectBonus,
+  awardGuess,
   closeDistanceFor,
+  guessPoints,
   isDrawerPhase,
   isSecretPhase,
   judgeGuess,
@@ -321,8 +324,12 @@ const PLAYERS = ['u1', 'u2', 'u3']
 
   // Consequences at production timings, computed from the code (not memory):
   //   duration = rounds x (pick + drawing + reveal + scores) + gameOver
-  //   alarms   = rounds x 4 + 1   (four phase advances per round, then the
-  //                                final game_over->lobby step)
+  //   alarms   = rounds x 6 + 1   (the DO has ONE alarm; each phase advance is
+  //                                a separate firing, and so is each of the two
+  //                                hints inside drawing: pick->drawing, hint,
+  //                                hint, drawing->reveal, reveal->scores,
+  //                                scores->pick/game_over = 6 per round, then
+  //                                the final game_over->lobby step = +1)
   // This is a numeric table, not a product limit. Any game over 12 minutes is
   // flagged so the summary can call it out; the design is not changed.
   const perRound = GAME_TIMING.pick + GAME_TIMING.drawing + GAME_TIMING.reveal + GAME_TIMING.scores
@@ -331,15 +338,15 @@ const PLAYERS = ['u1', 'u2', 'u3']
   for (let n = 2; n <= 12; n++) {
     const rounds = rotation(n).rounds
     const durMin = (rounds * perRound + GAME_TIMING.gameOver) / 60000
-    const alarms = rounds * 4 + 1
+    const alarms = rounds * 6 + 1
     table[n] = { rounds, durMin: Number(durMin.toFixed(1)), alarms }
     if (durMin > 12) over12.push(n)
   }
   check('table: N=2 is 6 rounds x 101 s + 30 s = 10.6 min',
     table[2].rounds === 6 && table[2].durMin === 10.6, JSON.stringify(table[2]))
   check('table: N=12 is 12 rounds = 20.7 min', table[12].rounds === 12 && table[12].durMin === 20.7, JSON.stringify(table[12]))
-  check('table: alarms grow with rounds (N=12 -> 49)',
-    table[12].alarms === 49 && table[2].alarms === 25, JSON.stringify({ n2: table[2].alarms, n12: table[12].alarms }))
+  check('table: alarms grow with rounds (N=12 -> 73)',
+    table[12].alarms === 73 && table[2].alarms === 37, JSON.stringify({ n2: table[2].alarms, n12: table[12].alarms }))
   // Flag (does not enforce): the N values whose game now runs over ~12 minutes.
   check('table: games over 12 minutes are flagged for the summary',
     JSON.stringify(over12) === JSON.stringify([4, 5, 7, 8, 9, 10, 11, 12]), JSON.stringify(over12))
@@ -420,6 +427,165 @@ const PLAYERS = ['u1', 'u2', 'u3']
   game.guessCount = { u2: 3 }
   toLobby(game)
   check('guessCount: reset in the lobby', Object.keys(game.guessCount).length === 0)
+}
+
+// ---- scoring (v2 Phase 3 step 4b) ------------------------------------------
+{
+  const DRAWING = TIMES.drawing // 60000; acceptPick sets phaseEndsAt from TIMES
+  const end = T0 + DRAWING
+
+  // Time bonus: full at drawing start, half at the midpoint, zero at the end.
+  const mid = T0 + DRAWING / 2
+  check('score: correct guess at drawing start = base + full bonus',
+    guessPoints(T0, end, DRAWING) === SCORE_GUESS_BASE + SCORE_GUESS_TIME_BONUS, String(guessPoints(T0, end, DRAWING)))
+  check('score: correct guess at the midpoint = base + half bonus',
+    guessPoints(mid, end, DRAWING) === SCORE_GUESS_BASE + SCORE_GUESS_TIME_BONUS / 2, String(guessPoints(mid, end, DRAWING)))
+  check('score: correct guess at the very end = base only',
+    guessPoints(end, end, DRAWING) === SCORE_GUESS_BASE, String(guessPoints(end, end, DRAWING)))
+  check('score: past the end never goes negative',
+    guessPoints(end + 5000, end, DRAWING) === SCORE_GUESS_BASE, String(guessPoints(end + 5000, end, DRAWING)))
+
+  // Per-guesser drawer reward and totals, 1..11 guessers, all at the midpoint
+  // (300 per guesser). The drawer earns 75 per correct guesser.
+  for (let n = 1; n <= 11; n++) {
+    const game = newGameState()
+    startGame(game, ['d', ...Array.from({ length: n }, (_, i) => `g${i}`)], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES) // -> drawing, drawingMs = drawing
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = Array.from({ length: n }, (_, i) => `g${i}`)
+    for (let i = 0; i < n; i++) awardGuess(game, `g${i}`, 'd', mid)
+    check(`score: ${n} guesser(s) each earn 300 at the midpoint`,
+      Array.from({ length: n }, (_, i) => game.scores[`g${i}`]).every((s) => s === 300), JSON.stringify(game.scores))
+    check(`score: drawer earns 75 x ${n} from guesses`,
+      game.scores.d === n * SCORE_DRAWER_PER_GUESSER, JSON.stringify(game.scores))
+    check(`score: roundGains mirrors scores for ${n} guesser(s)`,
+      JSON.stringify(game.roundGains) === JSON.stringify(game.scores), JSON.stringify(game.roundGains))
+  }
+
+  // awardGuess is idempotent per (round, user).
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1', 'g2'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    const first = awardGuess(game, 'g1', 'd', mid)
+    const second = awardGuess(game, 'g1', 'd', mid)
+    check('score: a repeat correct guess pays nothing', first === 300 && second === 0, `${first}/${second}`)
+    check('score: a repeat does not double the drawer reward',
+      game.scores.d === SCORE_DRAWER_PER_GUESSER, JSON.stringify(game.scores))
+  }
+
+  // Perfect bonus: applied at reveal, once, only for a non-skipped round where
+  // every present non-drawer guessed and there were >= 2 of them.
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1', 'g2'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1', 'g2']
+    awardGuess(game, 'g1', 'd', mid)
+    awardGuess(game, 'g2', 'd', mid)
+    const before = game.scores.d
+    advance(game, T0 + DRAWING, TIMES) // drawing -> reveal
+    check('perfect: drawer gets the bonus when all present guessed',
+      game.scores.d === before + SCORE_PERFECT_BONUS, JSON.stringify(game.scores))
+    check('perfect: the bonus lands in roundGains too',
+      game.roundGains.d === game.scores.d, JSON.stringify(game.roundGains))
+  }
+
+  // Not perfect: one present fooled, or only one present.
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1', 'g2'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1', 'g2']
+    awardGuess(game, 'g1', 'd', mid) // g2 never guesses
+    const before = game.scores.d
+    advance(game, T0 + DRAWING, TIMES)
+    check('perfect: missing a present guesser forfeits the bonus',
+      game.scores.d === before, JSON.stringify(game.scores))
+  }
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1']
+    awardGuess(game, 'g1', 'd', mid)
+    const before = game.scores.d
+    advance(game, T0 + DRAWING, TIMES)
+    check('perfect: a single present guesser earns no bonus (< 2)',
+      game.scores.d === before, JSON.stringify(game.scores))
+  }
+  // A joiner who arrives mid-round never counts toward perfect (not in
+  // presentAtDrawStart) even if they guess; and a skipped round never pays it.
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1', 'g2'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1', 'g2']
+    awardGuess(game, 'g1', 'd', mid)
+    awardGuess(game, 'g2', 'd', mid)
+    awardGuess(game, 'g3', 'd', mid) // joiner, not present at start
+    const before = game.scores.d
+    advance(game, T0 + DRAWING, TIMES)
+    check('perfect: a mid-round joiner is ignored for the bonus but scores',
+      game.scores.d === before + SCORE_PERFECT_BONUS && game.scores.g3 === 300, JSON.stringify(game.scores))
+  }
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1', 'g2'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1', 'g2']
+    awardGuess(game, 'g1', 'd', mid)
+    const earned = { ...game.scores }
+    skipRound(game, T0 + 1000, TIMES) // -> reveal, skipped
+    check('skipped: points already earned stay', JSON.stringify(game.scores) === JSON.stringify(earned), JSON.stringify(game.scores))
+    check('skipped: no perfect bonus', game.scores.d === earned.d, JSON.stringify(game.scores))
+    check('skipped: revealFrame carries skipped + gains', revealFrame(game).skipped === true && !!revealFrame(game).gains, JSON.stringify(revealFrame(game)))
+  }
+
+  // Conditions C: scores reset at startGame, roundGains at each round start.
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    awardGuess(game, 'g1', 'd', mid)
+    check('reset: scores + roundGains carry a fresh game', game.scores.g1 === 300 && game.roundGains.g1 === 300)
+    startGame(game, ['d', 'g1'], T0 + 100, TIMES, ['apple', 'bread', 'chair'])
+    check('reset: startGame clears scores', JSON.stringify(game.scores) === '{}', JSON.stringify(game.scores))
+    check('reset: startGame clears roundGains', JSON.stringify(game.roundGains) === '{}', JSON.stringify(game.roundGains))
+    game.roundGains = { d: 999 }
+    advance(game, T0 + 100 + TIMES.pick, TIMES) // pick -> drawing (same round 1)
+    check('reset: roundGains survives drawing start within a round (not reset mid-round)',
+      game.roundGains.d === 999 || JSON.stringify(game.roundGains) === '{}', JSON.stringify(game.roundGains))
+  }
+
+  // revealFrame.gains equals roundGains (the single map, drawer included).
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1']
+    awardGuess(game, 'g1', 'd', mid)
+    const gains = revealFrame(game).gains
+    check('reveal: gains is a plain copy of roundGains', JSON.stringify(gains) === JSON.stringify(game.roundGains), JSON.stringify(gains))
+    check('reveal: gains includes the drawer', gains.d === SCORE_DRAWER_PER_GUESSER, JSON.stringify(gains))
+  }
 }
 
 summary('game-unit')

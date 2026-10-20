@@ -351,7 +351,12 @@ function parseReveal(p) {
   if (p.word !== null && !isWord(p.word)) return null
   if (typeof p.skipped !== 'boolean') return null
   if (!Array.isArray(p.correct) || p.correct.some((uid) => !isUid(uid))) return null
-  return { round: p.round, word: p.word, correct: p.correct, skipped: p.skipped }
+  const gains = p.gains === undefined ? {} : p.gains
+  if (!gains || typeof gains !== 'object' || Array.isArray(gains)) return null
+  for (const [uid, points] of Object.entries(gains)) {
+    if (!isUid(uid) || !Number.isInteger(points)) return null
+  }
+  return { round: p.round, word: p.word, correct: p.correct, skipped: p.skipped, gains }
 }
 
 // The private reply to one guess: only the guesser ever receives it. The ack
