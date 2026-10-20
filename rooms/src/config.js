@@ -156,6 +156,13 @@ export const SCORE_DRAWER_PER_GUESSER = 75 // drawer earns this per correct gues
 export const SCORE_PERFECT_BONUS = 100 // drawer bonus when every non-drawer present at drawing start guessed
 export const PERFECT_MIN_GUESSERS = 2 // a perfect round needs at least this many eligible guessers
 
+// A disconnected seat still blocks an early finish for this long after it
+// dropped, so a slow reconnect can guess. After the window it stops blocking
+// while KEEPING its seat (SEAT_HOLD_MS is the full hold). Without this a single
+// absent player could stall early finish for the whole 2-minute seat hold.
+// Dev-only override (EARLY_FINISH_HOLD_MS); production always uses the default.
+export const EARLY_FINISH_HOLD_MS = 15000
+
 // Defaults: 6 rounds x 75 s drawing is ~10-13 minutes per game (see the N table
 // in tests/game-unit.test.mjs). 75 s sits inside the spec's 60-80 s range so a
 // normal round feels like production on the phone-testing worker, which runs
@@ -168,6 +175,7 @@ export const GAME_TIMING = Object.freeze({
   scores: 8000,
   gameOver: 30000,
   drawerGrace: 10000,
+  earlyFinishHold: EARLY_FINISH_HOLD_MS,
 })
 
 const TIMING_ENV = Object.freeze({
@@ -177,6 +185,7 @@ const TIMING_ENV = Object.freeze({
   scores: 'GAME_SCORES_MS',
   gameOver: 'GAME_OVER_MS',
   drawerGrace: 'DRAWER_GRACE_MS',
+  earlyFinishHold: 'EARLY_FINISH_HOLD_MS',
 })
 
 /**

@@ -135,7 +135,8 @@ new_sqlite_classes = ["Room", "Limiter"]
 #     --var "GAME_REVEAL_MS:3000" \
 #     --var "GAME_SCORES_MS:3000" \
 #     --var "GAME_OVER_MS:5000" \
-#     --var "DRAWER_GRACE_MS:3000"
+#     --var "DRAWER_GRACE_MS:3000" \
+#     --var "EARLY_FINISH_HOLD_MS:2000"
 #
 # One-time secret (dev-only, never a file/log/message). Without it the per-IP
 # socket cap is unenforceable (hash.js returns null and ipCapAllows allows all):
@@ -167,6 +168,7 @@ GAME_REVEAL_MS = "3000"
 GAME_SCORES_MS = "3000"
 GAME_OVER_MS = "5000"
 DRAWER_GRACE_MS = "3000"
+EARLY_FINISH_HOLD_MS = "2000"
 
 [[env.fast.ratelimits]]
 name = "JOIN_USER"

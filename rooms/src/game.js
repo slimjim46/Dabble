@@ -187,7 +187,9 @@ export function skipRound(game, now, times) {
 }
 
 /**
- * End the drawing phase early (every connected-or-held non-drawer has guessed).
+ * End the drawing phase early (every required non-drawer has guessed: connected
+ * seats always, held seats only inside their early-finish window — the caller,
+ * Room.pendingGuesserIds, decides the set).
  * Never skipped: points already earned stay and the perfect bonus still
  * applies. Returns false unless the game is actually in drawing, so a duplicate
  * call or a stale alarm cannot reveal twice.

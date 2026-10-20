@@ -281,6 +281,11 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
           break
 
         case 'reveal':
+          // The drawing phase is over: the drawer's in-flight line can never be
+          // completed (the server ignores a late stroke_end once mayDraw flips),
+          // so drop every live stroke now instead of leaving a ghost on the
+          // paper until it prunes. Identical for an early finish and a timeout.
+          store.clearLive()
           setReveal(frame.data)
           break
 

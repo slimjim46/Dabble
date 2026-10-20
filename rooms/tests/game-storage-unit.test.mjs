@@ -456,7 +456,14 @@ async function drawingRoom(seatSpec) {
   let seatN = 0
   for (const [uid, kind] of Object.entries(seatSpec)) {
     if (kind === 'none') continue
-    seats[uid] = { seat: seatN++, claimedAt: 1, heldUntil: kind === 'held' ? now + 60000 : null }
+    // A held seat is inside its early-finish window by default (it still
+    // blocks); tests override earlyFinishUntil to expel the window.
+    seats[uid] = {
+      seat: seatN++,
+      claimedAt: 1,
+      heldUntil: kind === 'held' ? now + 60000 : null,
+      earlyFinishUntil: kind === 'held' ? now + 15000 : null,
+    }
   }
   const game = {
     ...newGameState(), gameSeq: 7, phase: 'drawing', round: 2, rounds: 6,
@@ -543,6 +550,66 @@ async function drawingRoom(seatSpec) {
   check('only-drawer: no early finish with no guessers', ended === false && r.game.phase === 'drawing', r.game.phase)
 }
 
+// ---- early-finish hold window (EARLY_FINISH_HOLD_MS) -----------------------
+// A disconnected seat blocks an early finish only inside its window; after the
+// window it stops blocking while KEEPING its seat. A reconnect re-blocks.
+{
+  // Inside the window: still blocks (a slow reconnect may still guess). The
+  // harness default window (now + 15000) is active here.
+  const { room, r, sockets } = await drawingRoom({ d: 'open', u2: 'open', u3: 'held' })
+  check('window: a held seat starts inside its window', r.seats.u3.earlyFinishUntil > Date.now(), String(r.seats.u3.earlyFinishUntil))
+  await room.webSocketMessage(sockets.u2, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('window: a held seat inside its window blocks early finish', r.game.phase === 'drawing', r.game.phase)
+
+  // Expire the window; the alarm re-checks and ends the round, keeping the seat.
+  r.seats.u3.earlyFinishUntil = Date.now() - 1
+  await room.alarm()
+  check('window: after the window the round ends early', r.game.phase === 'reveal', r.game.phase)
+  check('window: the seat is kept (still held, not released)', !!r.seats.u3 && !!r.seats.u3.heldUntil, JSON.stringify(r.seats.u3))
+}
+
+{
+  // The window expiry alone (no release, no reconnect) re-checks via the alarm.
+  const { room, r, sockets } = await drawingRoom({ d: 'open', u2: 'open', u3: 'held' })
+  r.seats.u3.earlyFinishUntil = Date.now() - 1
+  await room.webSocketMessage(sockets.u2, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('window: an expired window blocks nothing even before the alarm', r.game.phase === 'reveal', r.game.phase)
+  check('window: still exactly one reveal', sockets.d.frames.filter((f) => f.t === 'reveal').length === 1)
+}
+
+{
+  // Reconnect re-blocks: a seat whose window was cleared (heldUntil cleared by
+  // the join path) must guess again. Simulate the post-reconnect state: the
+  // player is connected with no earlyFinishUntil.
+  const { room, r, sockets } = await drawingRoom({ d: 'open', u2: 'open' })
+  r.seats.u3 = { seat: 3, claimedAt: 1, heldUntil: null, earlyFinishUntil: null }
+  const u3 = fakeSocket('u3', { readyState: OPEN })
+  room.state.sockets.push(u3)
+  await room.webSocketMessage(sockets.u2, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('window: a reconnected non-guesser blocks again', r.game.phase === 'drawing', r.game.phase)
+  await room.webSocketMessage(u3, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('window: the reconnected player guessing ends the round', r.game.phase === 'reveal', r.game.phase)
+}
+
+{
+  // Two disconnected seats with different windows: the round waits for the
+  // later window, then ends when it passes. Seats kept throughout.
+  const { room, r, sockets } = await drawingRoom({ d: 'open', u2: 'open', u3: 'held', u4: 'held' })
+  r.seats.u3.earlyFinishUntil = Date.now() + 20000
+  r.seats.u4.earlyFinishUntil = Date.now() + 40000
+  await room.webSocketMessage(sockets.u2, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('window: two open windows keep the round drawing', r.game.phase === 'drawing', r.game.phase)
+  // Expire only u3: u4 still blocks.
+  r.seats.u3.earlyFinishUntil = Date.now() - 1
+  await room.alarm()
+  check('window: the earlier window alone does not end the round', r.game.phase === 'drawing', r.game.phase)
+  // Expire u4 too: now every seat is accounted for.
+  r.seats.u4.earlyFinishUntil = Date.now() - 1
+  await room.alarm()
+  check('window: the later window ends the round', r.game.phase === 'reveal', r.game.phase)
+  check('window: both seats kept', !!r.seats.u3 && !!r.seats.u4)
+}
+
 {
   // A mid-round joiner (non-drawer, connected) who has not guessed blocks it.
   const { room, r, sockets } = await drawingRoom({ d: 'open', u2: 'open' })
@@ -599,6 +666,45 @@ async function drawingRoom(seatSpec) {
   r.game.phaseEndsAt = Date.now() - 1
   await room.alarm() // scores -> pick (clears the round)
   check('open-stroke: scores->pick clears the round like the timer path', !room.state.map.has(key), [...room.state.map.keys()].join(','))
+}
+
+{
+  // F1 (option A): the drawer's IN-FLIGHT stroke (started, never ended) is
+  // treated identically at an early finish and at a timer end. In neither path
+  // is it stored (only stroke_end stores; the phase flip makes mayDraw false,
+  // so a later stroke_end is ignored). The snapshot a late joiner would get
+  // during the reveal is therefore byte-identical between the two paths — and
+  // omits the dangling line in both.
+  const openStart = (k) => JSON.stringify({
+    v: 1, t: 'stroke_start', k, id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+    userId: 'd', userName: 'Guest', color: '#30a46c', width: 5, pts: [10, 10],
+  })
+
+  // Room A: early finish triggered by the last required guesser.
+  const a = await drawingRoom({ d: 'open', u2: 'open' })
+  await a.room.webSocketMessage(a.sockets.d, openStart('sk'))
+  await a.room.webSocketMessage(a.sockets.u2, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('symmetry: early finish leaves the round in reveal', a.r.game.phase === 'reveal', a.r.game.phase)
+  const snapA = await a.room.snapshotFrame(a.r)
+
+  // Room B: same open stroke, then the drawing timer expires (the alarm path).
+  const realNow = Date.now
+  const b = await drawingRoom({ d: 'open', u2: 'open' })
+  await b.room.webSocketMessage(b.sockets.d, openStart('sk'))
+  Date.now = () => b.r.game.phaseEndsAt + 1
+  try {
+    await b.room.alarm()
+  } finally {
+    Date.now = realNow
+  }
+  check('symmetry: the timer path leaves the round in reveal', b.r.game.phase === 'reveal', b.r.game.phase)
+  const snapB = await b.room.snapshotFrame(b.r)
+
+  check('symmetry: the reveal snapshot is identical after early finish and after timeout',
+    JSON.stringify(snapA.strokes) === JSON.stringify(snapB.strokes),
+    JSON.stringify({ a: snapA.strokes, b: snapB.strokes }))
+  check('symmetry: the in-flight drawer stroke is absent from the snapshot in both paths',
+    snapA.strokes.length === 0 && snapB.strokes.length === 0, JSON.stringify(snapA.strokes))
 }
 
 summary('game-storage-unit')

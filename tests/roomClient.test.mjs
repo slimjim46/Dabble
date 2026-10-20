@@ -985,6 +985,13 @@ function sourceCode(rel) {
   check('transport: sends pick through the shared builder', transport.includes('pickMessage('))
   check('transport: sends guess through the shared builder', transport.includes('guessMessage('))
   check('transport: applies the guess_ack frame', transport.includes("case 'guess_ack'"))
+  // The reveal ends the drawing phase: the drawer's dangling live line must be
+  // dropped then (the server ignores a late stroke_end once mayDraw flips), so
+  // the reveal case clears live strokes before rendering.
+  check('transport: drops live strokes on the reveal frame',
+    /case 'reveal'[\s\S]{0,300}clearLive\(\)/.test(transport))
+  check('strokeStore: exposes clearLive',
+    sourceCode('src/engine/strokeStore.js').includes('clearLive()'))
   // A guess_cap is a transient notice, never a fatal status: it must not call
   // setStatus('error') (which would block reconnect-on-visible).
   check('transport: guess_cap is routed to a notice, not the error state',
@@ -1074,11 +1081,25 @@ function sourceCode(rel) {
         'SUPABASE_ANON_KEY', 'SUPABASE_URL', 'ENVIRONMENT', 'ALLOWED_ORIGINS',
         'IP_ROOM_SOCKET_LIMIT', 'MAX_ROOMS_PER_IP_PER_HOUR', 'ROOM_GRACE_MS',
         'SEAT_HOLD_MS', 'GAME_PICK_MS', 'GAME_ROUND_MS', 'GAME_REVEAL_MS',
-        'GAME_SCORES_MS', 'GAME_OVER_MS', 'DRAWER_GRACE_MS',
+        'GAME_SCORES_MS', 'GAME_OVER_MS', 'DRAWER_GRACE_MS', 'EARLY_FINISH_HOLD_MS',
       ]
       const missing = requiredVars.filter((v) => !deployCmd.includes(`--var "${v}:`))
       check('wrangler: the [env.fast] deploy command repeats every var via --var',
         deployCmd.length > 0 && missing.length === 0, JSON.stringify(missing))
+
+      // `--var` REPLACES the whole table, so the table and the command must
+      // list EXACTLY the same key set (minus SUPABASE_ANON_KEY, which is
+      // secret and only ever passed on the command line). 9cbafc7 dropped two
+      // keys from the table and no test noticed; this is that guard.
+      const tableVars = code.split('[env.fast.vars]')[1]?.split('[[env.fast')[0] ?? ''
+      const tableKeys = [...tableVars.matchAll(/^\s*([A-Z][A-Z0-9_]*)\s*=/gm)].map((m) => m[1]).sort()
+      const cmdKeys = [...deployCmd.matchAll(/--var "([A-Z][A-Z0-9_]*):/g)]
+        .map((m) => m[1])
+        .filter((k) => k !== 'SUPABASE_ANON_KEY')
+        .sort()
+      const same = tableKeys.length > 0 && tableKeys.join(',') === cmdKeys.join(',')
+      check('wrangler: [env.fast.vars] keys equal the deploy command keys',
+        same, JSON.stringify({ table: tableKeys, command: cmdKeys }))
     }
   }
 }
@@ -1172,7 +1193,14 @@ function sourceCode(rel) {
     'src/lib/wire.js',
     'src/lib/stroke.js',
   ]
-  const ALLOWED = new Set(['src/components/StatusPill.jsx', 'src/index.css'])
+  const ALLOWED = new Set([
+    'src/components/StatusPill.jsx',
+    'src/index.css',
+    // A2 (step 4b close-out): clearLive() is an ADDITIVE, rooms-only method —
+    // the reveal frame drops the drawer's dangling live stroke. The plaza
+    // never calls it (asserted below), so plaza behaviour is unchanged.
+    'src/engine/strokeStore.js',
+  ])
 
   let git = null
   try {
@@ -1192,6 +1220,14 @@ function sourceCode(rel) {
     const untracked = git(['ls-files', '--others', '--exclude-standard', '--', ...PLAZA_PATHS])
     const added = untracked ? untracked.split('\n') : []
     check('plaza guard: no new file under the plaza paths', added.length === 0, JSON.stringify(added))
+
+    // The engine change allowed above is rooms-only: the plaza's own draw
+    // path must never call clearLive, or the additive method would become a
+    // plaza behaviour change.
+    const plazaUsers = ['src/components/DrawingApp.jsx', 'src/hooks/useRealtimeCanvas.js']
+    const callers = plazaUsers.filter((f) => sourceCode(f).includes('clearLive'))
+    check('plaza guard: the plaza draw path never calls clearLive', callers.length === 0,
+      JSON.stringify(callers))
   }
 }
 

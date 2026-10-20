@@ -206,6 +206,9 @@ export class Room {
     const deadlines = [room.createdAt + MAX_ROOM_LIFETIME_MS]
     for (const s of Object.values(room.seats)) {
       if (s.heldUntil) deadlines.push(s.heldUntil)
+      // A held seat stops blocking an early finish at this earlier deadline,
+      // while still keeping its seat: arm the alarm for whichever comes first.
+      if (s.earlyFinishUntil) deadlines.push(s.earlyFinishUntil)
     }
     if (this.openSocketCount() === 0 && room.lastEmptyAt) {
       deadlines.push(room.lastEmptyAt + this.graceMs())
@@ -297,8 +300,14 @@ export class Room {
       for (const r of released) this.presence(room, 'leave', r.uid, r.seat.seat)
       if (hostChanged) this.presence(room, 'host', room.hostUserId, room.seats[room.hostUserId]?.seat ?? null)
       logEvent('seats_released', { n: released.length })
-      // A released seat no longer blocks an early finish: if it was the last
-      // non-drawer who had not guessed, the round ends now.
+    }
+
+    // Early-finish windows: a held seat that has been gone longer than
+    // EARLY_FINISH_HOLD_MS stops blocking the round while still keeping its
+    // seat. This alarm fires at the earliest such window, so re-check now;
+    // a seat whose window has not passed keeps blocking. Covers both a fresh
+    // release above and a window expiry with no release.
+    if (released.length || Object.values(room.seats).some((s) => s.earlyFinishUntil && now >= s.earlyFinishUntil)) {
       await this.endDrawingEarly(room)
     }
 
@@ -413,10 +422,13 @@ export class Room {
     if (!existingSeat) {
       seat = room.nextSeat
       room.nextSeat += 1
-      room.seats[userId] = { seat, claimedAt: now, heldUntil: null }
+      room.seats[userId] = { seat, claimedAt: now, heldUntil: null, earlyFinishUntil: null }
       logEvent('seat_claimed', { seat })
     } else {
       room.seats[userId].heldUntil = null // reconnect regains the seat
+      // Reconnect re-blocks an early finish: the player is present again and
+      // must guess (or the round must end) before it can finish.
+      room.seats[userId].earlyFinishUntil = null
     }
     // Host whose seat is gone (released earlier with nobody connected to
     // promote at the time): promote now, longest-connected wins — the
@@ -690,13 +702,15 @@ export class Room {
   }
 
   /**
-   * User ids of non-drawer seats that are connected OR held (a held seat is a
-   * briefly-disconnected player who may still reconnect and guess). This is the
-   * set that must all have guessed before a drawing round finishes early: a
-   * locked phone or a network blip must not end the round before that player
-   * has had a chance. A released seat (kicked, or hold expired) is not in it.
+   * User ids of non-drawer seats that must guess before a drawing round may
+   * finish early. A CONNECTED seat always blocks until it guesses. A
+   * disconnected (held) seat blocks only inside its early-finish window
+   * (`seat.earlyFinishUntil`, set when it dropped): a slow reconnect gets a
+   * chance, but after that window it stops blocking while KEEPING its seat, so
+   * a single absent player cannot stall the round for the whole seat hold. A
+   * released seat (kicked, or hold expired) is never in it.
    */
-  pendingGuesserIds(room) {
+  pendingGuesserIds(room, now = Date.now()) {
     const game = room.game
     const drawer = game?.drawerUserId
     const ids = []
@@ -704,18 +718,26 @@ export class Room {
       if (uid === drawer) continue
       const seat = room.seats[uid]
       if (!seat) continue
-      if (seat.heldUntil || this.isConnected(uid)) ids.push(uid)
+      if (this.isConnected(uid)) {
+        ids.push(uid)
+      } else if (seat.earlyFinishUntil && now < seat.earlyFinishUntil) {
+        ids.push(uid)
+      }
     }
     return ids
   }
 
   /**
-   * End the drawing phase early when every non-drawer seat that is connected or
-   * held has guessed correctly, with at least one such guesser. Runs the SAME
-   * round-end path as the timer (`beginReveal` -> `afterGameStep`), so the open
-   * stroke is settled and the alarm is rearmed exactly as at a timeout. Guarded
-   * on phase, so a second call in the same tick — or a stale drawing alarm
-   * afterwards — is a no-op. Returns true if it finished the round.
+   * End the drawing phase early when every required non-drawer seat has guessed
+   * correctly, with at least one such guesser. Converges on the SAME round-end
+   * as the timer — `beginReveal` -> `afterGameStep` (the timer reaches it via
+   * `advance()`, this method via `finishDrawingEarly`) — so the phase flip and
+   * the alarm rearm are identical. The drawer's still-open stroke is NOT stored
+   * by either path (only `stroke_end` stores); because the phase flips, a later
+   * `stroke_end` is ignored by `mayDraw`, so watchers keep the dangling live
+   * line and drop it when the `reveal` frame arrives (client `clearLive`).
+   * Guarded on phase, so a second call in the same tick — or a stale drawing
+   * alarm afterwards — is a no-op. Returns true if it finished the round.
    */
   async endDrawingEarly(room) {
     const game = room.game
@@ -1119,6 +1141,10 @@ export class Room {
         // handler runs (the remaining count above already excludes the
         // closing socket).
         seat.heldUntil = Date.now() + this.holdMs()
+        // The round is not stalled by the full hold: this seat stops blocking
+        // an early finish after EARLY_FINISH_HOLD_MS, while still keeping its
+        // seat. A reconnect clears it (the seat blocks again).
+        seat.earlyFinishUntil = Date.now() + gameTimings(this.env).earlyFinishHold
         await this.saveSafe(room)
         logEvent('seat_held', { until: seat.heldUntil, hold: this.holdMs() })
         this.presence(room, 'part', att.userId, seat.seat)
@@ -1140,9 +1166,10 @@ export class Room {
       room.lastEmptyAt = room.lastEmptyAt || Date.now()
       await this.saveSafe(room)
     }
-    // A seat that just became held still blocks an early finish (the player may
-    // reconnect and guess); a seat already released (kicked) does not. Either
-    // way, re-check: if the last required guesser is accounted for, end now.
+    // A seat that just became held still blocks an early finish inside its
+    // window (the player may reconnect and guess); a seat already released
+    // (kicked) does not. Either way, re-check: if the last required guesser is
+    // accounted for, end now. The window's own deadline is armed by rearm().
     await this.endDrawingEarly(room)
     await this.rearm()
   }

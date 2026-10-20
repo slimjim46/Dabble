@@ -99,6 +99,15 @@ export function createStrokeStore() {
     },
     liveStrokes: () => live.values(),
 
+    // Drop every in-progress stroke at once. Used when the round ends (the
+    // drawer's line is never completed once mayDraw flips, so without this a
+    // watcher keeps a ghost line until it prunes): the reveal frame clears it.
+    clearLive() {
+      const had = live.size > 0
+      live.clear()
+      return had
+    },
+
     // Someone who disconnects mid-stroke would otherwise leave a ghost line.
     pruneStaleLive(now, maxAgeMs) {
       let pruned = false
