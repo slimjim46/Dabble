@@ -101,19 +101,61 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
         redrawRef={redrawRef}
       />
 
-      <GameHeader
-        game={game}
-        ready={ready}
-        isHost={isHost}
-        isDrawer={isDrawer}
-        drawerName={drawerName}
-        playerCount={players.length}
-        wordPick={wordPick}
-        yourWord={yourWord}
-        reveal={reveal}
-        onStart={() => api.start()}
-        onPick={(i) => api.pick(i)}
-      />
+      <div className="room-top">
+        <div className="room-top-left">
+          <span className="name-pill">
+            <span className="name-button" title="You">
+              {identity.name}
+            </span>
+          </span>
+          <GameHeader
+            game={game}
+            ready={ready}
+            isHost={isHost}
+            isDrawer={isDrawer}
+            drawerName={drawerName}
+            playerCount={players.length}
+            wordPick={wordPick}
+            yourWord={yourWord}
+            reveal={reveal}
+            onStart={() => api.start()}
+            onPick={(i) => api.pick(i)}
+          />
+        </div>
+
+        <div className="room-bar">
+          <span className="status-pill">
+            <span
+              className={`status-dot ${
+                status === 'connected' ? 'status-dot-live' : status === 'error' ? 'status-dot-down' : 'status-dot-warn'
+              }`}
+            />
+            {statusLabel(status, ready, error)}
+          </span>
+
+          <span className="room-code-chip">
+            <span ref={codeRef} className="room-code">
+              {code}
+            </span>
+            <button type="button" className="room-copy" onClick={copyCode}>
+              {copied ? 'Copied' : 'Copy'}
+            </button>
+          </span>
+
+          <button
+            type="button"
+            className="room-pill-button"
+            onClick={() => setPanelOpen((open) => !open)}
+            aria-expanded={panelOpen}
+          >
+            {players.length} in room
+          </button>
+
+          <button type="button" className="room-pill-button" onClick={leave}>
+            Leave
+          </button>
+        </div>
+      </div>
 
       <GuessBar
         canGuess={canGuess}
@@ -123,39 +165,6 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
         correctNames={correctNames}
         onGuess={(text) => api.guess(text)}
       />
-
-      <div className="room-bar">
-        <span className="status-pill">
-          <span
-            className={`status-dot ${
-              status === 'connected' ? 'status-dot-live' : status === 'error' ? 'status-dot-down' : 'status-dot-warn'
-            }`}
-          />
-          {statusLabel(status, ready, error)}
-        </span>
-
-        <span className="room-code-chip">
-          <span ref={codeRef} className="room-code">
-            {code}
-          </span>
-          <button type="button" className="room-copy" onClick={copyCode}>
-            {copied ? 'Copied' : 'Copy'}
-          </button>
-        </span>
-
-        <button
-          type="button"
-          className="room-pill-button"
-          onClick={() => setPanelOpen((open) => !open)}
-          aria-expanded={panelOpen}
-        >
-          {players.length} in room
-        </button>
-
-        <button type="button" className="room-pill-button" onClick={leave}>
-          Leave
-        </button>
-      </div>
 
       {panelOpen && (
         <div className="room-panel" role="dialog" aria-label="Players">
@@ -205,7 +214,7 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
       )}
 
 
-      {status === 'reconnecting' && !isError && (
+      {status === 'reconnecting' && !isError && !panelOpen && (
         <div className="room-banner" role="status">
           Reconnecting…
         </div>
@@ -280,6 +289,39 @@ function remaining(game) {
 }
 
 /**
+ * How many pixels the on-screen keyboard covers at the bottom, for laying the
+ * guess bar above it. iOS Safari does not support `env(keyboard-inset-height)`
+ * (nor `interactive-widget`), so we read `window.visualViewport`: the keyboard
+ * overlap is the layout viewport height minus the visible visual viewport,
+ * minus any `offsetTop` (iOS also scrolls the visual viewport). Listening to
+ * the viewport's `resize`/`scroll` is the only reliable signal on iOS; the
+ * listener is torn down with the component. Returns 0 when there is no
+ * visualViewport API (older browsers) or no keyboard, so the CSS default
+ * (`bottom: max(12px, safe-area-inset-bottom)`) still applies.
+ */
+function useKeyboardInset() {
+  const [inset, setInset] = useState(0)
+
+  useEffect(() => {
+    const vv = typeof window !== 'undefined' ? window.visualViewport : null
+    if (!vv) return undefined
+    const update = () => {
+      const overlap = window.innerHeight - vv.height - vv.offsetTop
+      setInset(Math.max(0, Math.round(overlap)))
+    }
+    update()
+    vv.addEventListener('resize', update)
+    vv.addEventListener('scroll', update)
+    return () => {
+      vv.removeEventListener('resize', update)
+      vv.removeEventListener('scroll', update)
+    }
+  }, [])
+
+  return inset
+}
+
+/**
  * The guess control and its private feedback (v2 Phase 3 step 4a). Only the
  * guesser ever sees the outcome; other players only learn that someone guessed
  * via the public `correct` list, which never carries the text. The send button
@@ -291,6 +333,7 @@ function GuessBar({ canGuess, haveGuessed, ack, notice, correctNames, onGuess })
   const [lockedUntil, setLockedUntil] = useState(0)
   const [tick, setTick] = useState(0)
   const inputRef = useRef(null)
+  const keyboardInset = useKeyboardInset()
 
   useEffect(() => {
     if (lockedUntil <= Date.now()) return undefined
@@ -313,7 +356,7 @@ function GuessBar({ canGuess, haveGuessed, ack, notice, correctNames, onGuess })
   }
 
   return (
-    <div className="game-guess">
+    <div className="game-guess" style={keyboardInset > 0 ? { bottom: `${keyboardInset}px` } : undefined}>
       {correctNames.length > 0 && (
         <div className="game-guess-correct" role="status">
           {correctNames.length === 1 ? `${correctNames[0]} guessed it` : `${correctNames.length} guessed it`}

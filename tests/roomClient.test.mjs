@@ -881,6 +881,49 @@ function sourceCode(rel) {
   check('RoomScreen: private feedback offers only Close!/Not quite',
     screen.includes("ack.close ? 'Close!' : 'Not quite'"))
 
+  // Rooms UI fixes: one wrapping top row owns the chrome (name, game header,
+  // room bar) so the name pill and the header can no longer share the top-left
+  // corner; the panel is an overlay-layer dialog and the reconnect banner is
+  // suppressed while it is open; the guess bar lifts itself above the on-screen
+  // keyboard via window.visualViewport (iOS Safari has no keyboard-inset env).
+  const css = sourceCode('src/rooms/rooms.css')
+  check('RoomScreen: top chrome is a single wrapping row', screen.includes('room-top') && screen.includes('room-top-left'))
+  check('rooms.css: the top row wraps', /\.room-top\s*\{[\s\S]*?flex-wrap:\s*wrap/.test(css))
+  check('rooms.css: the name pill is static inside the room (no top-left corner fight)',
+    /\.room-screen \.name-pill\s*\{[\s\S]*?position:\s*static/.test(css))
+  check('rooms.css: the game header no longer uses an absolute top-left offset',
+    !/^\.game-header\s*\{[^}]*position:\s*absolute/m.test(css))
+  check('rooms.css: the players panel sits at the overlay layer (z6)',
+    /\.room-panel\s*\{[\s\S]*?z-index:\s*6/.test(css))
+  check('RoomScreen: the reconnect banner is hidden while the panel is open',
+    screen.includes("status === 'reconnecting'") && screen.includes('!panelOpen'))
+  check('RoomScreen: the guess bar lifts above the keyboard via visualViewport',
+    screen.includes('visualViewport') && screen.includes('keyboardInset'))
+  check('RoomScreen: it does NOT rely on env(keyboard-inset-height)',
+    !screen.includes('keyboard-inset-height') && !css.includes('keyboard-inset-height'))
+  check('RoomScreen: the keyboard inset listens to the visualViewport resize',
+    /visualViewport[\s\S]*?addEventListener\('resize'/.test(screen))
+
+  // Toolbar fit: rooms wrap the row instead of overflowing at 320 px, and the
+  // swatches keep their 26 px plaza size. Scoped to .room-screen so the plaza
+  // toolbar is untouched.
+  check('rooms.css: the room toolbar row wraps', /\.room-screen \.toolbar-row\s*\{[\s\S]*?flex-wrap:\s*wrap/.test(css))
+  check('rooms.css: the room swatch group may shrink/wrap',
+    /\.room-screen \.swatches\s*\{[\s\S]*?flex:\s*0 1 auto/.test(css))
+  check('rooms.css: the swatch size is not overridden (stays the plaza 26 px)',
+    !/\.room-screen \.swatch\s*\{/.test(css))
+  // The plaza row needs ~388 px (8x26 + 7x6 gaps + 10 + 3x34 brushes + 20 pad),
+  // which overflows a 300 px container at 320 px width; wrapping is the fix, so
+  // no single control may be forced to overflow the bar.
+  {
+    const swatchRow = 8 * 26 + 7 * 6
+    const brushes = 3 * 34 + 2 * 2
+    check('toolbar fit: the unwrapped row would overflow 320 px (wrap is required)',
+      swatchRow + 10 + brushes + 20 > 300, String(swatchRow + 10 + brushes + 20))
+  }
+  check('index.css: the plaza toolbar is not restyled by the room rules',
+    !sourceCode('src/index.css').includes('.room-screen .toolbar-row'))
+
   const transport = sourceCode('src/rooms/useRoomTransport.js')
   check('transport: flushes points on the shared constant', transport.includes('ROOM_POINT_FLUSH_MS'))
   check('transport: flushes cursors on the shared constant', transport.includes('ROOM_CURSOR_FLUSH_MS'))
@@ -945,6 +988,59 @@ function sourceCode(rel) {
   check('.env.example: documents VITE_ROOMS_URL', env.includes('VITE_ROOMS_URL='))
   check('.env.example: no real rooms URL is committed',
     !/VITE_ROOMS_URL=\s*https?:\/\//.test(env))
+
+  // The dev worker config (rooms/wrangler.toml). Two rules matter:
+  //   1. the phone-testing worker (default vars) must run PRODUCTION timings:
+  //      it defines no GAME_* and no DRAWER_GRACE_MS, so it inherits GAME_TIMING
+  //      (drawing 75 s, pick 10 s, reveal 8 s, scores 8 s, grace 10 s).
+  //   2. the fast test worker ([env.fast]) is dev-only: ENVIRONMENT "dev"
+  //      exactly, no production origin, and it repeats its own bindings,
+  //      migrations and vars (a named env inherits nothing).
+  {
+    const raw = readSource('rooms/wrangler.toml')
+    // Split off the comment lines so a stray GAME_* in a comment cannot pass.
+    const code = raw.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n')
+    const defaultVars = code.split('[env.fast]')[0].split('[env.production]')[0]
+    check('wrangler: the phone dev worker defines no GAME_* override',
+      !/GAME_[A-Z]+_MS\s*=/.test(defaultVars), defaultVars.match(/GAME_[A-Z]+_MS\s*=[^\n]*/)?.[0])
+    check('wrangler: the phone dev worker defines no DRAWER_GRACE_MS override',
+      !/DRAWER_GRACE_MS\s*=/.test(defaultVars))
+
+    const fast = code.split('[env.fast]')[1]?.split('[env.production]')[0] ?? ''
+    check('wrangler: [env.fast] exists with its own vars', fast.length > 0 && fast.includes('ENVIRONMENT'))
+    check('wrangler: [env.fast] is ENVIRONMENT = "dev" exactly', /ENVIRONMENT\s*=\s*"dev"/.test(fast))
+    check('wrangler: [env.fast] defines the short GAME_* overrides',
+      /GAME_ROUND_MS\s*=\s*"12000"/.test(fast) && /GAME_PICK_MS\s*=/.test(fast))
+    check('wrangler: [env.fast] has no production origin in ALLOWED_ORIGINS',
+      !/ALLOWED_ORIGINS\s*=\s*"[^"]*(PRODUCTION|\.example|dabble-rooms\.)/.test(fast), fast.match(/ALLOWED_ORIGINS\s*=\s*"[^"]*"/)?.[0])
+    check('wrangler: [env.fast] repeats its Durable Object bindings',
+      fast.includes('env.fast.durable_objects.bindings') && fast.includes('class_name = "Room"') && fast.includes('class_name = "Limiter"'))
+    check('wrangler: [env.fast] repeats its migrations',
+      fast.includes('env.fast.migrations') && fast.includes('new_sqlite_classes'))
+    check('wrangler: [env.fast] repeats its rate limits',
+      fast.includes('env.fast.ratelimits'))
+    check('wrangler: no anon key is committed (it is injected via --var)',
+      !/SUPABASE_ANON_KEY\s*=/.test(raw))
+    // wrangler 4.x: `--var` REPLACES a named env's vars table, so the deploy
+    // command (documented in the comment above [env.fast]) must repeat EVERY
+    // var, including SUPABASE_URL and ENVIRONMENT. A missing SUPABASE_URL makes
+    // the JWT issuer check fail and every request 401.
+    check('wrangler: [env.fast].vars is a table section, not an inline vars = { }',
+      /^\[env\.fast\.vars\]/m.test(raw) && !/^vars\s*=\s*\{/.test(fast))
+    {
+      const fastComment = raw.split('[env.fast]')[0]
+      const deployCmd = fastComment.slice(fastComment.lastIndexOf('# Deploy'))
+      const requiredVars = [
+        'SUPABASE_ANON_KEY', 'SUPABASE_URL', 'ENVIRONMENT', 'ALLOWED_ORIGINS',
+        'IP_ROOM_SOCKET_LIMIT', 'MAX_ROOMS_PER_IP_PER_HOUR', 'ROOM_GRACE_MS',
+        'SEAT_HOLD_MS', 'GAME_PICK_MS', 'GAME_ROUND_MS', 'GAME_REVEAL_MS',
+        'GAME_SCORES_MS', 'GAME_OVER_MS', 'DRAWER_GRACE_MS',
+      ]
+      const missing = requiredVars.filter((v) => !deployCmd.includes(`--var "${v}:`))
+      check('wrangler: the [env.fast] deploy command repeats every var via --var',
+        deployCmd.length > 0 && missing.length === 0, JSON.stringify(missing))
+    }
+  }
 }
 
 // ===========================================================================

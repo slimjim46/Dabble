@@ -10,18 +10,60 @@
 }
 
 /* ---- top-right chrome ---- */
-.room-bar {
+/* One wrapping row owns all top chrome: the left column (name + game header)
+   and the right bar. It is a flex row that wraps, so on a narrow screen the
+   bar drops to a second line instead of overlapping the header. No absolute
+   top offsets, so the overlap the screenshot showed cannot recur. */
+.room-top {
   position: absolute;
   top: max(10px, env(safe-area-inset-top));
+  left: 12px;
   right: 12px;
-  left: auto;
   z-index: 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.room-top-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Everything in the top row is interactive again (the container is
+   pointer-events:none so the paper shows through the gaps). */
+.room-top > *,
+.room-top .name-pill,
+.room-top .status-pill,
+.room-top .room-pill-button,
+.room-top .room-copy,
+.room-top .game-header {
+  pointer-events: auto;
+}
+
+/* In a room the name pill is the first chip of the left column, not an
+   absolute top-left element fighting the game header for the same corner. */
+.room-screen .name-pill {
+  position: static;
+  top: auto;
+  left: auto;
+  z-index: auto;
+}
+
+.room-bar {
   display: flex;
   align-items: center;
   justify-content: flex-end;
   flex-wrap: wrap;
   gap: 6px;
-  max-width: calc(100vw - 120px);
+  max-width: 100%;
+  min-width: 0;
 }
 
 /* index.css centres .status-pill absolutely for the plaza; in a room it is
@@ -87,11 +129,14 @@
 }
 
 /* ---- players panel ---- */
+/* The panel is a dialog: it sits at the overlay layer (z6) so it covers the
+   toast and the reconnect banner instead of sharing their slot, and the
+   RoomScreen suppresses the reconnect banner while it is open. */
 .room-panel {
   position: absolute;
-  top: calc(max(10px, env(safe-area-inset-top)) + 42px);
+  top: calc(max(10px, env(safe-area-inset-top)) + 44px);
   right: 12px;
-  z-index: 4;
+  z-index: 6;
   width: min(280px, calc(100vw - 24px));
   background: var(--ui-bg);
   border: 1px solid var(--ui-border);
@@ -176,9 +221,12 @@
 }
 
 /* ---- transient notices ---- */
+/* The toast and the reconnect banner share the centered column but never the
+   same vertical slot: the toast sits just under the top row, the banner a row
+   below it, so a kick toast and a reconnect banner can show together. */
 .room-toast {
   position: absolute;
-  top: calc(max(10px, env(safe-area-inset-top)) + 44px);
+  top: calc(max(10px, env(safe-area-inset-top)) + 56px);
   left: 50%;
   transform: translateX(-50%);
   z-index: 5;
@@ -199,8 +247,10 @@
 
 .room-banner {
   position: absolute;
-  top: calc(max(10px, env(safe-area-inset-top)) + 44px);
-  right: 12px;
+  top: calc(max(10px, env(safe-area-inset-top)) + 88px);
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
   z-index: 3;
   font-size: 12px;
   color: var(--ui-text);
@@ -388,17 +438,15 @@
 /* ---- game header (v2 Phase 3 step 3) ---- */
 /* A single zone above the paper that is a pure renderer of server frames:
    the round, the countdown, the hint, and the pick/reveal/scores prompts.
-   It reuses the same surfaces as the rest of the room chrome. */
+   It reuses the same surfaces as the rest of the room chrome. It flows inside
+   .room-top-left, so it wraps under the name pill rather than overlapping it. */
 .game-header {
-  position: absolute;
-  top: max(10px, env(safe-area-inset-top));
-  left: 12px;
-  z-index: 2;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-  max-width: calc(100vw - 200px);
+  min-width: 0;
+  max-width: 100%;
 }
 
 .game-header-card {
@@ -469,6 +517,38 @@
 
 .game-choice:hover {
   border-color: var(--ui-text);
+}
+
+/* ---- room toolbar fit (v2 rooms UI fixes) ---- */
+/* The plaza toolbar is one non-wrapping row: 8 swatches at 26 px plus the
+   S/M/L brushes need ~388 px, so at 320 px the row overflowed and S/M/L
+   jammed the right edge at a different height. Rooms wrap instead: the
+   swatch group and the brush group may sit on two lines, every control stays
+   inside the bar, and the swatches keep their 26 px size (the plaza value).
+   Scoped to .room-screen so the plaza toolbar is untouched. */
+.room-screen .toolbar-row {
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  row-gap: 8px;
+}
+
+.room-screen .swatches {
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-content: center;
+}
+
+.room-screen .brushes {
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+/* Keep every control aligned to the same baseline inside a wrapped row. */
+.room-screen .swatch,
+.room-screen .brush {
+  align-self: center;
 }
 
 /* ---- guess bar (v2 Phase 3 step 4a) ---- */

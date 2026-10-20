@@ -146,10 +146,14 @@ export const CLOSE_MAX_LENGTH_FOR_DISTANCE_1 = 7
 export const CLOSE_DISTANCE_NEAR = 1
 export const CLOSE_DISTANCE_FAR = 2
 
-// Defaults: 6 rounds x 60 s drawing is ~10 minutes per game.
+// Defaults: 6 rounds x 75 s drawing is ~10-13 minutes per game (see the N table
+// in tests/game-unit.test.mjs). 75 s sits inside the spec's 60-80 s range so a
+// normal round feels like production on the phone-testing worker, which runs
+// these defaults with no overrides. Hints stay at HINT_FRACTIONS (50 %/75 %)
+// because beginDrawing derives them from times.drawing.
 export const GAME_TIMING = Object.freeze({
   pick: 10000,
-  drawing: 60000,
+  drawing: 75000,
   reveal: 8000,
   scores: 8000,
   gameOver: 30000,

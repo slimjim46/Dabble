@@ -272,10 +272,14 @@ const PLAYERS = ['u1', 'u2', 'u3']
 
 // ---- phase timings: dev-only env overrides ---------------------------------
 {
+  // 75 s drawing sits inside the spec's 60-80 s range. Hints are derived from
+  // HINT_FRACTIONS x times.drawing, so 75 s keeps them at 50 %/75 %.
   check('timings: production defaults are the spec values',
-    GAME_TIMING.pick === 10000 && GAME_TIMING.drawing === 60000 && GAME_TIMING.reveal === 8000 &&
+    GAME_TIMING.pick === 10000 && GAME_TIMING.drawing === 75000 && GAME_TIMING.reveal === 8000 &&
     GAME_TIMING.scores === 8000 && GAME_TIMING.gameOver === 30000 && GAME_TIMING.drawerGrace === 10000,
     JSON.stringify(GAME_TIMING))
+  check('timings: drawing is inside the spec 60-80 s window',
+    GAME_TIMING.drawing >= 60000 && GAME_TIMING.drawing <= 80000, String(GAME_TIMING.drawing))
 
   const dev = { ENVIRONMENT: 'dev', GAME_PICK_MS: '1000', GAME_ROUND_MS: '5000', DRAWER_GRACE_MS: '2500' }
   const overridden = gameTimings(dev)
@@ -303,11 +307,10 @@ const PLAYERS = ['u1', 'u2', 'u3']
     edge.pick === 500 && edge.drawing === 3600000, JSON.stringify(edge))
 }
 
-// ---- table shape for N = 2..12 (design guard, not a product limit) ----------
+// ---- table shape + consequences for N = 2..12 (design guard) ----------------
 {
   // R = N x T with T = ceil(6/N): R is 6 for N<=6, then grows with N. This is
-  // the deliberate "everyone draws at least once" shape; the durations/alarm
-  // counts are projections at production timings, printed in the step summary.
+  // the deliberate "everyone draws at least once" shape.
   const expected = { 2: 6, 3: 6, 4: 8, 5: 10, 6: 6, 7: 7, 8: 8, 9: 9, 10: 10, 11: 11, 12: 12 }
   for (const [n, rounds] of Object.entries(expected)) {
     const r = rotation(Number(n))
@@ -315,6 +318,31 @@ const PLAYERS = ['u1', 'u2', 'u3']
     check(`table: N=${n} divides evenly`, r.rounds % Number(n) === 0)
   }
   check('table: the design has no player cap of 6', rotation(12).rounds === 12)
+
+  // Consequences at production timings, computed from the code (not memory):
+  //   duration = rounds x (pick + drawing + reveal + scores) + gameOver
+  //   alarms   = rounds x 4 + 1   (four phase advances per round, then the
+  //                                final game_over->lobby step)
+  // This is a numeric table, not a product limit. Any game over 12 minutes is
+  // flagged so the summary can call it out; the design is not changed.
+  const perRound = GAME_TIMING.pick + GAME_TIMING.drawing + GAME_TIMING.reveal + GAME_TIMING.scores
+  const table = {}
+  const over12 = []
+  for (let n = 2; n <= 12; n++) {
+    const rounds = rotation(n).rounds
+    const durMin = (rounds * perRound + GAME_TIMING.gameOver) / 60000
+    const alarms = rounds * 4 + 1
+    table[n] = { rounds, durMin: Number(durMin.toFixed(1)), alarms }
+    if (durMin > 12) over12.push(n)
+  }
+  check('table: N=2 is 6 rounds x 101 s + 30 s = 10.6 min',
+    table[2].rounds === 6 && table[2].durMin === 10.6, JSON.stringify(table[2]))
+  check('table: N=12 is 12 rounds = 20.7 min', table[12].rounds === 12 && table[12].durMin === 20.7, JSON.stringify(table[12]))
+  check('table: alarms grow with rounds (N=12 -> 49)',
+    table[12].alarms === 49 && table[2].alarms === 25, JSON.stringify({ n2: table[2].alarms, n12: table[12].alarms }))
+  // Flag (does not enforce): the N values whose game now runs over ~12 minutes.
+  check('table: games over 12 minutes are flagged for the summary',
+    JSON.stringify(over12) === JSON.stringify([4, 5, 7, 8, 9, 10, 11, 12]), JSON.stringify(over12))
 }
 
 // ---- guessing: normalisation, closeness, cap reset (v2 Phase 3 step 4a) ------

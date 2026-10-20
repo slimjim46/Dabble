@@ -399,14 +399,6 @@ export default function RoomPaper({ store, cursors, api, identity, disabled, red
         />
       )}
 
-      {/* Read-only: the room server derives the display name from the player's
-          own `players` row, so a local rename would only disagree with what
-          everyone else sees. */}
-      <div className="name-pill">
-        <span className="name-button" title="You">
-          {identity.name}
-        </span>
-      </div>
     </div>
   )
 }
