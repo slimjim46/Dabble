@@ -187,6 +187,18 @@ export function skipRound(game, now, times) {
 }
 
 /**
+ * End the drawing phase early (every connected-or-held non-drawer has guessed).
+ * Never skipped: points already earned stay and the perfect bonus still
+ * applies. Returns false unless the game is actually in drawing, so a duplicate
+ * call or a stale alarm cannot reveal twice.
+ */
+export function finishDrawingEarly(game, now, times) {
+  if (game.phase !== 'drawing') return false
+  beginReveal(game, now, times, false)
+  return true
+}
+
+/**
  * One alarm step. Returns { from, to, event } for logging/side effects. The
  * caller clears the old round's strokes before a scores->pick advance (the
  * round number changes here) and before deleting a game (lobby).

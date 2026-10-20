@@ -403,15 +403,25 @@ async function newRoom(seed = {}, env = ENV) {
     order: ['u1', 'u2'], drawerUserId: 'u1', word: 'pizza',
     phaseEndsAt: Date.now() + 100000, deadlineAt: Date.now() + 100000,
   }
-  const first = await newRoom({ room: seededRoom(game) })
+  // A third non-drawer seat that is connected and never guesses keeps the round
+  // in drawing: u2 guessing correctly must NOT finish the round early here, so
+  // the masked-state assertion below is meaningful (u3 would block early
+  // finish; its own early-finish behaviour is covered in game-unit).
+  const seed = seededRoom(game)
+  seed.nextSeat = 3
+  seed.seats.u3 = { seat: 2, claimedAt: 3, heldUntil: null }
+  const first = await newRoom({ room: seed })
   const r1 = await first.room.load()
   const guesserWs = fakeSocket('u2')
-  first.state.sockets.push(guesserWs)
+  const blockerWs = fakeSocket('u3')
+  first.state.sockets.push(guesserWs, blockerWs)
   const before = guesserWs.frames.length
   await first.room.webSocketMessage(guesserWs, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
   check('evict: a correct guess is saved before any reload',
     r1.game.correct.includes('u2') && r1.game.guessCount.u2 === 1,
     JSON.stringify({ correct: r1.game.correct, guessCount: r1.game.guessCount }))
+  check('evict: a correct guess with a pending guesser keeps the round in drawing',
+    r1.game.phase === 'drawing', r1.game.phase)
   check('evict: a correct guess scores even with no drawingMs (base only)',
     r1.game.scores.u2 === SCORE_GUESS_BASE && r1.game.scores.u1 === SCORE_DRAWER_PER_GUESSER,
     JSON.stringify(r1.game.scores))
@@ -434,6 +444,161 @@ async function newRoom(seed = {}, env = ENV) {
   check('evict: the secret word is still masked in the public state after reload',
     reloadedState.phase === 'drawing' && reloadedState.wordLen === 5 &&
     !JSON.stringify(reloadedState).includes('pizza'), JSON.stringify(reloadedState))
+}
+
+// ---- early finish + idempotency (v2 Phase 3 step 4b) ------------------------
+// Builds a live drawing round with the given seats. seatSpec: { uid: 'open' |
+// 'held' | 'none' }. The drawer is always 'd'. Returns the room, loaded state,
+// sockets by uid, and the current game.
+async function drawingRoom(seatSpec) {
+  const now = Date.now()
+  const seats = {}
+  let seatN = 0
+  for (const [uid, kind] of Object.entries(seatSpec)) {
+    if (kind === 'none') continue
+    seats[uid] = { seat: seatN++, claimedAt: 1, heldUntil: kind === 'held' ? now + 60000 : null }
+  }
+  const game = {
+    ...newGameState(), gameSeq: 7, phase: 'drawing', round: 2, rounds: 6,
+    order: ['d', ...Object.keys(seatSpec).filter((u) => u !== 'd')],
+    drawerUserId: 'd', word: 'pizza', drawingMs: ENV.GAME_ROUND_MS ? Number(ENV.GAME_ROUND_MS) : 12000,
+    phaseEndsAt: now + 5000, deadlineAt: now + 5000, presentAtDrawStart: [],
+  }
+  const { state, room } = await newRoom({ room: { createdAt: now, hostUserId: 'd', nextSeat: seatN, seats, blocked: {}, lastEmptyAt: null, game } })
+  const r = await room.load()
+  const sockets = {}
+  for (const [uid, kind] of Object.entries(seatSpec)) {
+    if (kind !== 'open') continue
+    const ws = fakeSocket(uid, { readyState: OPEN })
+    state.sockets.push(ws)
+    sockets[uid] = ws
+  }
+  // A socket for the drawer too, so the drawer seat is "connected".
+  if (seatSpec.d !== 'none') {
+    const dws = fakeSocket('d', { readyState: OPEN })
+    state.sockets.push(dws)
+    sockets.d = dws
+  }
+  return { room, r, sockets }
+}
+
+{
+  // Everyone connected guesses -> the round ends immediately (reveal), on the
+  // same path as the timer, and the round is not skipped.
+  const { room, r, sockets } = await drawingRoom({ d: 'open', u2: 'open', u3: 'open' })
+  await room.webSocketMessage(sockets.u2, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('early: one guesser with another pending keeps drawing', r.game.phase === 'drawing', r.game.phase)
+  await room.webSocketMessage(sockets.u3, JSON.stringify({ v: 1, t: 'guess', text: 'PIZZA' }))
+  check('early: the last required guesser ends the round', r.game.phase === 'reveal', r.game.phase)
+  check('early: the reveal is not skipped', r.game.skipped === false)
+  check('early: both guessers scored', r.game.scores.u2 > 0 && r.game.scores.u3 > 0, JSON.stringify(r.game.scores))
+}
+
+{
+  // Idempotency: after an early finish, the stale drawing deadline alarm is a
+  // no-op — no second reveal, no double scoring.
+  const { room, r, sockets } = await drawingRoom({ d: 'open', u2: 'open' })
+  await room.webSocketMessage(sockets.u2, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('idem: single guesser ends the round', r.game.phase === 'reveal', r.game.phase)
+  const scores = JSON.stringify(r.game.scores)
+  const reveals1 = sockets.d.frames.filter((f) => f.t === 'reveal').length
+  // The drawing deadline is still in the past: fire the stale alarm.
+  r.game.deadlineAt = Date.now() - 1
+  r.game.phaseEndsAt = Date.now() - 1
+  await room.alarm()
+  const reveals2 = sockets.d.frames.filter((f) => f.t === 'reveal').length
+  check('idem: the stale drawing alarm does not reveal again', reveals2 === reveals1, `before=${reveals1} after=${reveals2}`)
+  check('idem: no double scoring', JSON.stringify(r.game.scores) === scores, JSON.stringify(r.game.scores))
+}
+
+{
+  // Two correct guesses in the same "tick" (sequential, before any alarm) end
+  // the round once; the second correct guess sees a reveal phase and is ignored.
+  const { room, r, sockets } = await drawingRoom({ d: 'open', u2: 'open', u3: 'open' })
+  await room.webSocketMessage(sockets.u2, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  await room.webSocketMessage(sockets.u3, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  const reveals = sockets.d.frames.filter((f) => f.t === 'reveal').length
+  check('idem: the round reveals exactly once for two same-tick guesses', reveals === 1, `reveals=${reveals}`)
+  check('idem: both guessers scored exactly once',
+    r.game.scores.u2 === r.game.roundGains.u2 && r.game.scores.u3 === r.game.roundGains.u3,
+    JSON.stringify({ scores: r.game.scores, gains: r.game.roundGains }))
+}
+
+{
+  // A held seat blocks early finish until it is released or reconnects.
+  const { room, r, sockets } = await drawingRoom({ d: 'open', u2: 'open', u3: 'held' })
+  await room.webSocketMessage(sockets.u2, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('held: a held non-guesser blocks early finish', r.game.phase === 'drawing', r.game.phase)
+  // Release the held seat by expiring its hold, then fire the alarm: now
+  // everyone still present has guessed, so the round ends.
+  r.seats.u3.heldUntil = Date.now() - 1
+  await room.alarm()
+  check('held: releasing the held seat ends the round', r.game.phase === 'reveal', r.game.phase)
+}
+
+{
+  // Only the drawer is connected: no early finish (nothing to finish).
+  const { room, r } = await drawingRoom({ d: 'open' })
+  const ended = await room.endDrawingEarly(r)
+  check('only-drawer: no early finish with no guessers', ended === false && r.game.phase === 'drawing', r.game.phase)
+}
+
+{
+  // A mid-round joiner (non-drawer, connected) who has not guessed blocks it.
+  const { room, r, sockets } = await drawingRoom({ d: 'open', u2: 'open' })
+  r.seats.u4 = { seat: 5, claimedAt: 1, heldUntil: null }
+  const joinerWs = fakeSocket('u4', { readyState: OPEN })
+  room.state.sockets.push(joinerWs)
+  await room.webSocketMessage(sockets.u2, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('joiner: a connected non-guesser blocks early finish', r.game.phase === 'drawing', r.game.phase)
+  await room.webSocketMessage(joinerWs, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('joiner: once the joiner guesses the round ends', r.game.phase === 'reveal', r.game.phase)
+}
+
+{
+  // Condition A: a guess at or after phaseEndsAt is ignored (but still spends
+  // budget and persists the attachment). Inject the clock past the deadline.
+  const realNow = Date.now
+  const { room, r, sockets } = await drawingRoom({ d: 'open', u2: 'open' })
+  const ws = sockets.u2
+  const beforeFrames = ws.frames.length
+  // Seed a known token bucket so we can prove the ignored guess still spends
+  // rate budget (the bucket is decremented on arrival, before handleGuess).
+  ws.att.b = { guess: { tok: 5, last: Date.now() } }
+  Date.now = () => r.game.phaseEndsAt + 1 // past the deadline, alarm not fired
+  try {
+    await room.webSocketMessage(ws, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  } finally {
+    Date.now = realNow
+  }
+  const acks = ws.frames.slice(beforeFrames).filter((f) => f.t === 'guess_ack')
+  check('condA: a guess past phaseEndsAt is ignored (no ok ack)', acks.length === 0, JSON.stringify(acks))
+  check('condA: it still spends rate budget', ws.att.b.guess.tok < 5, JSON.stringify(ws.att.b.guess))
+  check('condA: it persists the attachment', typeof ws.att.userId === 'string' && !!ws.att.b.guess)
+  check('condA: it does not score or mark correct', !r.game.correct.includes('u2') && !r.game.scores.u2, JSON.stringify({ correct: r.game.correct, scores: r.game.scores }))
+  check('condA: the round is untouched (still drawing)', r.game.phase === 'drawing', r.game.phase)
+}
+
+{
+  // The open stroke at early finish is handled exactly as at the timer end:
+  // only completed strokes are stored (on stroke_end), and the round keys are
+  // NOT cleared at the reveal — that happens at scores->pick. So a stored
+  // stroke survives an early finish and is cleared later, identically.
+  const { room, r, sockets } = await drawingRoom({ d: 'open', u2: 'open' })
+  const key = roundKey(r.game.gameSeq, r.game.round, 1)
+  room.state.map.set(key, stroke('11111111-1111-4111-8111-111111111111'))
+  await room.webSocketMessage(sockets.u2, JSON.stringify({ v: 1, t: 'guess', text: 'pizza' }))
+  check('open-stroke: early finish keeps the stored round stroke', room.state.map.has(key), `keys=${[...room.state.map.keys()].join(',')}`)
+  check('open-stroke: the round ends in reveal', r.game.phase === 'reveal', r.game.phase)
+  // Advance reveal->scores->pick; the round clear runs on scores->pick.
+  r.game.deadlineAt = Date.now() - 1
+  r.game.phaseEndsAt = Date.now() - 1
+  await room.alarm() // reveal -> scores
+  check('open-stroke: reveal->scores keeps the stroke', room.state.map.has(key), [...room.state.map.keys()].join(','))
+  r.game.deadlineAt = Date.now() - 1
+  r.game.phaseEndsAt = Date.now() - 1
+  await room.alarm() // scores -> pick (clears the round)
+  check('open-stroke: scores->pick clears the round like the timer path', !room.state.map.has(key), [...room.state.map.keys()].join(','))
 }
 
 summary('game-storage-unit')

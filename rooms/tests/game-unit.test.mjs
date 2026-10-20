@@ -9,6 +9,7 @@ import {
   applyPerfectBonus,
   awardGuess,
   closeDistanceFor,
+  finishDrawingEarly,
   guessPoints,
   isDrawerPhase,
   isSecretPhase,
@@ -585,6 +586,30 @@ const PLAYERS = ['u1', 'u2', 'u3']
     const gains = revealFrame(game).gains
     check('reveal: gains is a plain copy of roundGains', JSON.stringify(gains) === JSON.stringify(game.roundGains), JSON.stringify(gains))
     check('reveal: gains includes the drawer', gains.d === SCORE_DRAWER_PER_GUESSER, JSON.stringify(gains))
+  }
+
+  // finishDrawingEarly (early finish state transition): drawing -> reveal,
+  // never skipped, applied once.
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1']
+    awardGuess(game, 'g1', 'd', mid)
+    const ok = finishDrawingEarly(game, T0 + 1000, TIMES)
+    check('early: finishDrawingEarly moves drawing -> reveal', ok === true && game.phase === 'reveal', game.phase)
+    check('early: an early finish is never skipped', game.skipped === false)
+    const again = finishDrawingEarly(game, T0 + 1001, TIMES)
+    check('early: a second finishDrawingEarly is a no-op', again === false && game.phase === 'reveal')
+  }
+  {
+    // finishDrawingEarly refuses outside drawing.
+    const game = newGameState()
+    startGame(game, ['d', 'g1'], T0, TIMES, ['apple', 'bread', 'chair'])
+    const ok = finishDrawingEarly(game, T0, TIMES) // still in pick
+    check('early: finishDrawingEarly is a no-op outside drawing', ok === false && game.phase === 'pick', game.phase)
   }
 }
 

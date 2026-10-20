@@ -62,9 +62,19 @@ for (let round = 1; round <= 6; round++) {
   drawer.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: `w${round}`, id, userId: 'x', userName: 'x', color: '#30a46c', width: 5, pts: [10, 10] }))
   drawer.ws.send(JSON.stringify({ v: 1, t: 'stroke_end', k: `w${round}`, stroke: { id, userId: 'x', userName: 'x', color: '#30a46c', width: 5, points: [10, 10, 40, 40, 80, 20] } }))
 
+  // Every non-drawer guesses correctly: the round should finish early (before
+  // the ~12 s drawing timer on the fast worker) and score both sides. The
+  // script knows the word, so it can drive the guesses that a real client
+  // could only make by knowing it.
+  for (const c of conns) {
+    if (c === drawer) continue
+    c.ws.send(JSON.stringify({ v: 1, t: 'guess', text: word }))
+  }
   const rev = await drawer.waitFor((m) => m.t === 'reveal' && m.round === round, 18000)
   console.log(`[round ${round}] reveal word="${rev?.word}" skipped=${rev?.skipped}`)
+  console.log(`[round ${round}] gains ${JSON.stringify(rev?.gains)}`)
   check(`round ${round}: reveal matches the drawing word`, rev?.word === word && rev.skipped === false)
+  check(`round ${round}: reveal carries per-round gains`, !!rev?.gains && Object.keys(rev.gains).length > 0, JSON.stringify(rev?.gains))
   check(`round ${round}: the non-drawer never saw the word before the reveal`,
     !other.json().some((m) => m.t !== 'reveal' && m.round === round && JSON.stringify(m).includes(word)))
 
@@ -84,9 +94,15 @@ for (let round = 1; round <= 6; round++) {
 
 const over = await conns[0].waitFor((m) => m.t === 'state' && m.phase === 'game_over', 12000)
 console.log(`[game over] manager state received=${!!over}`)
+const totals = over?.scores || {}
+const ranked = Object.entries(totals).sort((a, b) => b[1] - a[1])
+console.log('[game over] final totals:')
+for (const [uid, pts] of ranked) console.log(`  ${uid.slice(0, 8)}  ${pts}`)
+check('game over: every seat has a final score', Object.keys(totals).length > 0, JSON.stringify(totals))
 const lobby = await conns[0].waitFor((m) => m.t === 'state' && m.phase === 'lobby', 12000)
 console.log(`[lobby] back at rounds=${lobby?.rounds} drawer=${lobby?.drawer}`)
 check('game over returns to the lobby', !!lobby && lobby.rounds === 0 && lobby.drawer === null)
+check('game over: the lobby cleared the scores', !lobby?.scores || Object.keys(lobby.scores).length === 0, JSON.stringify(lobby?.scores))
 check('every player drew once per turn', new Set(drawerHistory).size === PLAYERS && drawerHistory.length === 6)
 
 for (const c of conns) await c.close()

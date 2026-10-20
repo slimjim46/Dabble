@@ -211,6 +211,22 @@ for (const [type, message] of outbound) {
   check('contract: reveal parses and carries the public word',
     rev?.type === 'reveal' && rev.data.word === 'castle' && rev.data.skipped === false, JSON.stringify(rev))
 
+  // Scoring (step 4b): reveal carries gains, and the client parses them. Also
+  // assert the negative cases so the shape cannot silently loosen.
+  const gainsFrame = { v: 1, t: 'reveal', round: 1, word: 'pizza', correct: ['u2'], skipped: false, gains: { u2: 300, u1: 150 } }
+  const g = parseRoomMessage(JSON.stringify(gainsFrame))
+  check('contract: reveal.gains parses as a userId -> points map',
+    g?.type === 'reveal' && g.data.gains?.u2 === 300 && g.data.gains?.u1 === 150, JSON.stringify(g))
+  check('contract: reveal without gains still parses (older frame)',
+    parseRoomMessage(JSON.stringify({ v: 1, t: 'reveal', round: 1, word: 'pizza', correct: [], skipped: false }))?.type === 'reveal')
+  for (const bad of [
+    JSON.stringify({ v: 1, t: 'reveal', round: 1, word: 'pizza', correct: [], skipped: false, gains: { u2: 1.5 } }),
+    JSON.stringify({ v: 1, t: 'reveal', round: 1, word: 'pizza', correct: [], skipped: false, gains: { u2: 'x' } }),
+    JSON.stringify({ v: 1, t: 'reveal', round: 1, word: 'pizza', correct: [], skipped: false, gains: [1, 2] }),
+  ]) {
+    check('contract: a malformed reveal.gains is rejected', !parseRoomMessage(bad), bad)
+  }
+
   const busy = parseRoomMessage(JSON.stringify({ v: 1, t: 'error', reason: 'busy' }))
   check('contract: the busy error parses and has copy + retry',
     busy?.type === 'error' && busy.data.reason === 'busy' && !!ROOM_ERROR_COPY.busy && RETRYABLE_ERRORS.includes('busy'),
