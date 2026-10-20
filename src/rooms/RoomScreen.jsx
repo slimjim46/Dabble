@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createCursorStore } from '../engine/cursorStore.js'
 import { createStrokeStore } from '../engine/strokeStore.js'
+import { flagEmoji } from '../lib/country.js'
 import { loadIdentity } from '../lib/identity.js'
 import { copyText } from './roomsClipboard.js'
 import { RETRYABLE_ERRORS, ROOM_ERROR_COPY } from './roomsErrors.js'
 import { ROOM_GUESS_SEND_DISABLE_MS, MAX_GUESS_LENGTH, MIN_PLAYERS } from './roomsConfig.js'
+import { gainRows, playerTotal, standings } from './roomsScores.js'
 import RoomPaper from './RoomPaper.jsx'
 import { useRoomTransport } from './useRoomTransport.js'
 
@@ -115,6 +117,7 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
             isDrawer={isDrawer}
             drawerName={drawerName}
             playerCount={players.length}
+            players={players}
             wordPick={wordPick}
             yourWord={yourWord}
             reveal={reveal}
@@ -177,6 +180,9 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
           <ul className="room-player-list">
             {players.map((player) => {
               const mine = player.seat === seat
+              // The current total is the server's, read from the latest state
+              // frame by userId; null before a frame arrives (render nothing).
+              const total = playerTotal(game, player.userId)
               return (
                 <li key={player.userId} className="room-player">
                   <span className="room-player-name" title={player.country ?? undefined}>
@@ -184,6 +190,7 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
                     {mine ? ' (you)' : ''}
                   </span>
                   {player.host && <span className="room-host-badge">host</span>}
+                  {total !== null && <span className="room-player-score">{total}</span>}
                   {isHost && !mine && (
                     <button
                       type="button"
@@ -405,7 +412,8 @@ function GuessBar({ canGuess, haveGuessed, ack, notice, correctNames, onGuess })
 /**
  * The header above the paper. It renders server frames only: no timer
  * authority, no locally invented word, and no scores the server did not send.
- * Step 4a adds guessing; the scoreboards arrive in step 4b.
+ * Scoreboards (v2 Phase 3) come from `state.scores` and `reveal.gains` via
+ * roomsScores.js, which looks every name up in the server's player list.
  */
 function GameHeader({
   game,
@@ -414,6 +422,7 @@ function GameHeader({
   isDrawer,
   drawerName,
   playerCount,
+  players,
   wordPick,
   yourWord,
   reveal,
@@ -479,36 +488,76 @@ function GameHeader({
   }
 
   if (game.phase === 'reveal') {
-    const word = reveal && reveal.round === game.round ? reveal.word : null
+    const sameRound = reveal && reveal.round === game.round
+    const word = sameRound ? reveal.word : null
+    const gains = sameRound ? gainRows(reveal, players) : null
     return (
       <div className="game-header game-header-card">
         <span className="game-round">{roundLabel}</span>
         <span className="game-word">{word ?? 'No one drew'}</span>
-        <span className="game-note">Scores arrive in a later update</span>
+        {gains && gains.length > 0 && (
+          <span className="game-gains" role="status">
+            {gains.map((row) => (
+              <span key={row.userId} className="game-gain">
+                <span className="game-gain-name">{row.name}</span>
+                <span className="game-gain-points">+{row.points}</span>
+              </span>
+            ))}
+          </span>
+        )}
       </div>
     )
   }
 
   if (game.phase === 'scores') {
     const count = game.correct.length
+    const rows = standings(game, players)
     return (
       <div className="game-header game-header-card">
         <span className="game-round">{roundLabel}</span>
         <span className="game-note">{count > 0 ? `${count} guessed it` : 'No one guessed it'}</span>
-        <span className="game-note">Scores arrive in a later update</span>
+        {rows && rows.length > 0 && <ScoreRows rows={rows} />}
       </div>
     )
   }
 
   if (game.phase === 'game_over') {
+    const rows = standings(game, players)
     return (
       <div className="game-header game-header-card">
-        <span className="game-note">Returning to lobby…</span>
-        <Countdown game={game} />
+        <span className="game-note">Final scores</span>
+        {rows && rows.length > 0 && <ScoreRows rows={rows} showFlags />}
+        <span className="game-note">
+          Back to lobby in <Countdown game={game} />
+        </span>
       </div>
     )
   }
 
   return null
+}
+
+/**
+ * A ranked scoreboard row set, from standings() in roomsScores.js: every
+ * value came from the server's score map, every identity from the server's
+ * player list. Display only — no arithmetic happens here.
+ */
+function ScoreRows({ rows, showFlags = false }) {
+  return (
+    <span className="game-scores">
+      {rows.map((row) => (
+        <span key={row.userId} className="game-score-row">
+          <span className="game-score-rank">{row.rank}</span>
+          <span className="game-score-name">{row.name}</span>
+          {showFlags && row.country && (
+            <span className="game-flag" aria-label={row.country}>
+              {flagEmoji(row.country)}
+            </span>
+          )}
+          <span className="game-score-total">{row.total}</span>
+        </span>
+      ))}
+    </span>
+  )
 }
 

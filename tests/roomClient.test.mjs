@@ -23,6 +23,7 @@ import { roomsEntryHref } from '../src/lib/roomsEntry.js'
 import { BRUSH_IDS, PALETTE, DEFAULT_COLOR, colorForKey } from '../src/lib/palette.js'
 import { encodePoints, quantize } from '../src/lib/strokeCodec.js'
 import { copyText } from '../src/rooms/roomsClipboard.js'
+import { gainRows, playerTotal, standings } from '../src/rooms/roomsScores.js'
 import { ROOM_ERROR_COPY, RETRYABLE_ERRORS, SERVER_NOTICE_ERRORS, TRANSPORT_ONLY_ERRORS } from '../src/rooms/roomsErrors.js'
 import {
   CLOSE_DISTANCE_FAR,
@@ -227,6 +228,14 @@ for (const [type, message] of outbound) {
     check('contract: a malformed reveal.gains is rejected', !parseRoomMessage(bad), bad)
   }
 
+  // The running scoreboard (Commit 3): the server's state frame carries the
+  // cumulative scores, and the client parser passes them through unchanged.
+  const scoredFrame = { ...stateFrame(game, 2000), scores: { [UUID]: 450, [UUID2]: 150 } }
+  const scored = parseRoomMessage(JSON.stringify(scoredFrame))
+  check('contract: state.scores parses as a userId -> points map',
+    scored?.type === 'state' && scored.data.scores?.[UUID] === 450 && scored.data.scores?.[UUID2] === 150,
+    JSON.stringify(scored))
+
   const busy = parseRoomMessage(JSON.stringify({ v: 1, t: 'error', reason: 'busy' }))
   check('contract: the busy error parses and has copy + retry',
     busy?.type === 'error' && busy.data.reason === 'busy' && !!ROOM_ERROR_COPY.busy && RETRYABLE_ERRORS.includes('busy'),
@@ -252,6 +261,70 @@ for (const [type, message] of outbound) {
   const okEnv = parseEnvelope(encode(guessMessage('x'.repeat(MAX_GUESS_LENGTH))))
   check('contract: a max-length guess is accepted', okEnv && CLIENT_TYPES.guess(okEnv.p) !== null)
   check('contract: an empty guess is rejected', (() => { const e = parseEnvelope(encode(guessMessage(''))); return !e || CLIENT_TYPES.guess(e.p) === null })())
+}
+
+// ===========================================================================
+// 1b. Scoreboards (v2 Phase 3 Commit 3): roomsScores.js turns the server's
+//     userId-keyed maps into display rows. It never computes a score: a
+//     present player missing from a present map is 0 (the server records a
+//     player only once points are awarded); a map-less frame renders nothing.
+// ===========================================================================
+{
+  const players = [
+    { userId: 'u1', seat: 0, name: 'Ann', country: 'DE', host: true },
+    { userId: 'u2', seat: 1, name: 'Bo', country: null, host: false },
+  ]
+
+  // The owner-required case: a seated player with no scores entry appears with
+  // total 0, because the server only adds a player once they are awarded.
+  const zeroed = standings({ scores: {} }, players)
+  check('scores: a seated player with no scores entry appears with total 0',
+    zeroed?.length === 2 && zeroed.every((row) => row.total === 0) &&
+    zeroed.map((r) => r.name).join() === 'Ann,Bo', JSON.stringify(zeroed))
+  check('playerTotal: a seated player with no scores entry is 0 in the player list',
+    playerTotal({ scores: {} }, 'u1') === 0)
+  check('playerTotal: a real entry is read unchanged',
+    playerTotal({ scores: { u1: 450 } }, 'u1') === 450 && playerTotal({ scores: { u1: 450 } }, 'u2') === 0)
+  check('playerTotal: nothing is rendered with no frame or in the lobby',
+    playerTotal(null, 'u1') === null && playerTotal(undefined, 'u1') === null &&
+    playerTotal({ phase: 'lobby', scores: { u1: 450 } }, 'u1') === null)
+
+  // Real totals rank above zeros; ties share a rank number (1, 1, 3) and keep
+  // the players-list order (stable sort).
+  const ranked = standings({ scores: { u2: 300, u1: 300, u9: 50 } }, players)
+  check('scores: rows are ranked by the server total, descending',
+    ranked?.[0].userId === 'u1' && ranked?.[0].total === 300 &&
+    ranked?.[2].userId === 'u9' && ranked?.[2].total === 50, JSON.stringify(ranked))
+  check('scores: tied totals share a rank number',
+    ranked?.[0].rank === 1 && ranked?.[1].rank === 1 && ranked?.[2].rank === 3, JSON.stringify(ranked))
+
+  // A score for a userId that has left the room keeps its value under a
+  // placeholder name, with no flag (u9 is not in the player list).
+  const departed = ranked?.find((r) => r.userId === 'u9')
+  check('scores: a departed userId renders as Player with its total, no flag',
+    departed?.name === 'Player' && departed?.total === 50 && departed?.country === null, JSON.stringify(departed))
+
+  // Identity comes only from the server player list, by userId.
+  check('scores: identity is taken from the player list, not the score map',
+    ranked?.[0].name === 'Ann' && ranked?.[1].name === 'Bo')
+
+  // An older frame with no scores map renders nothing (null), and neither
+  // does a non-map / array.
+  check('scores: a frame with no scores map renders nothing',
+    standings({ round: 1, phase: 'scores' }, players) === null &&
+    standings({ scores: [] }, players) === null && standings(null, players) === null)
+
+  // Reveal gains: same identity rules, but a player with no gain shows
+  // nothing (not +0) — a gain is different from a cumulative total.
+  const gains = gainRows({ gains: { u2: 300, u9: 150 } }, players)
+  check('gains: only players the server awarded appear, highest first',
+    gains?.length === 2 && gains[0].userId === 'u2' && gains[0].points === 300, JSON.stringify(gains))
+  check('gains: a departed gainer renders as Player with its points',
+    gains?.[1].name === 'Player' && gains[1].points === 150, JSON.stringify(gains))
+  check('gains: a seated player with no gain shows nothing',
+    !gains.some((row) => row.userId === 'u1'))
+  check('gains: an older frame with no gains map renders nothing',
+    gainRows({ round: 1 }, players) === null && gainRows(undefined, players) === null)
 }
 
 // ===========================================================================
@@ -873,8 +946,10 @@ function sourceCode(rel) {
   check('RoomScreen: passes the gate to the paper as `disabled`', screen.includes('disabled={!canDraw}'))
   check('RoomScreen: no next-game spectator copy is shown to non-drawers',
     !screen.includes('draw in the next game') && !screen.includes('game-spectate'))
+  // The game-over screen shows the final standings and a countdown back to the
+  // lobby; there is no lobby *button* (the server decides the transition).
   check('RoomScreen: the game-over screen has no lobby button',
-    !screen.includes('Back to lobby') && screen.includes('Returning to lobby'))
+    !/game_over[\s\S]{0,600}?<button/.test(screen) && screen.includes('Back to lobby in'))
   // The countdown counts down from the server's frame. It uses the larger of
   // the monotonic delta and the device wall-clock delta (never a server time),
   // and clamps to the frame's remainingMs, so a clock that freezes while the
@@ -906,6 +981,26 @@ function sourceCode(rel) {
     screen.includes('game.correct.map') && screen.includes('guessed it'))
   check('RoomScreen: private feedback offers only Close!/Not quite',
     screen.includes("ack.close ? 'Close!' : 'Not quite'"))
+
+  // Scoreboards (Commit 3): the header renders the server's numbers via the
+  // shared pure helper — the client never computes a score. The 0-default for
+  // a seated player with no scores entry lives in roomsScores.js (asserted by
+  // the unit tests above); RoomScreen only renders what the helper returns.
+  check('RoomScreen: standings come from the shared helper', screen.includes('standings(game, players)'))
+  check('RoomScreen: reveal gains come from the shared helper', screen.includes('gainRows(reveal, players)'))
+  check('RoomScreen: the player list total comes from the shared helper',
+    screen.includes('playerTotal(game, player.userId)'))
+  check('RoomScreen: GameHeader receives the server player list',
+    /GameHeader[\s\S]*?players=\{players\}/.test(screen))
+  check('RoomScreen: a frame with no scores renders nothing (helper may return null)',
+    screen.includes('rows && rows.length > 0') && screen.includes('gains && gains.length > 0'))
+  // Every score number is read by roomsScores.js: the screen must contain no
+  // score arithmetic and no zero-default of its own.
+  check('RoomScreen: no score arithmetic and no zero-default in the screen',
+    !/\?\? 0/.test(screen) && !/total\s*[+\-*/]/.test(screen) && !/points\s*[+\-*/]/.test(screen))
+  check('rooms.css: the scoreboard rows use tabular numerals',
+    /\.game-score-total\s*\{[\s\S]*?tabular-nums/.test(readSource('src/rooms/rooms.css')) &&
+    /\.room-player-score\s*\{[\s\S]*?tabular-nums/.test(readSource('src/rooms/rooms.css')))
 
   // Cursor cost: the hover branch of onPointerMove sends cursors for mouse
   // pointers only, but must also bail while the paper is disabled (a read-only
