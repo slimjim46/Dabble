@@ -711,6 +711,24 @@ import {
 //    MAX_MSG_BYTES) fill MAX_ROUND_POINTS after exactly 30 strokes. The rest
 //    still relay live but are not stored, and the next joiner's snapshot says
 //    partial.
+//
+//    The strokes are paced: 300 ms between a stroke_start and its stroke_end,
+//    700 ms after it. Four artists drawing at full speed put 16 messages on
+//    the wire in the first second, and a per-socket rate budget (5/s, burst
+//    10) plus a Durable Object busy writing 4.8 KB strokes can lose a frame
+//    when they arrive back to back. Pacing keeps every socket at 2
+//    messages/s, far under the budget, and gives the room time to settle
+//    between two frames of the same stroke.
+//
+//    The room is warmed before the measured strokes. A Durable Object loads
+//    its room state on the first message it handles, and the load is an
+//    await: a socket's stroke_start and its stroke_end must not straddle
+//    it. If they do, the stroke_end handler reads the attachment from
+//    before the stroke_start was written, finds no open stroke, and
+//    rejects the frame as a stroke_ownership violation — the stroke is
+//    then neither relayed nor stored, and the room's cap is never
+//    reached. A cursor frame is relayed but never stored, so the warm-up
+//    costs the round nothing: seeing it proves the room is loaded.
 {
   const host = await anonUser()
   const { body } = await createRoom(host.token)
@@ -721,6 +739,16 @@ import {
   }
   const w = await connect(body.code, (await anonUser()).token)
 
+  const warmDeadline = Date.now() + 8000
+  for (const c of artists) {
+    c.ws.send(JSON.stringify({ v: 1, t: 'cursor', k: 'warm', x: 1, y: 1 }))
+  }
+  while (w.json().filter((m) => m.t === 'cursor' && m.k === 'warm').length < artists.length && Date.now() < warmDeadline) {
+    await sleep(50)
+  }
+  const warmed = w.json().filter((m) => m.t === 'cursor' && m.k === 'warm').length
+  check('caps: the room is warm before the measured strokes', warmed === artists.length, `${warmed}/${artists.length}`)
+
   const big = []
   for (let j = 0; j < 1300; j++) big.push(j % 100) // 650 points, ~4.8 KB on the wire
 
@@ -728,23 +756,43 @@ import {
     for (let i = 0; i < 8; i++) {
       const id = `0e0a0000-0000-4000-8000-${'000000000' + a + String(i).padStart(2, '0')}`
       c.ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'big', id, userId: 'x', userName: 'x', color: '#e5484d', width: 4, pts: [1, 1] }))
-      await sleep(150)
+      await sleep(300)
       c.ws.send(JSON.stringify({ v: 1, t: 'stroke_end', k: 'big', stroke: { id, userId: 'x', userName: 'x', color: '#e5484d', width: 4, points: big } }))
-      await sleep(350)
+      await sleep(700)
     }
   }
   await Promise.all(artists.map((c, a) => draw(c, a)))
   await sleep(500) // let the last storage writes settle
 
+  // A socket that closed mid-section is the usual reason a stroke goes
+  // missing: the frames were never sent and the count checks below would
+  // only show a gap. Report the close first, with its code and reason.
+  const dropped = artists
+    .map((c, i) => (c.closed ? { artist: i, code: c.closes[0]?.code, reason: c.closes[0]?.reason } : null))
+    .filter(Boolean)
+  check('caps: no artist socket closed during the section', dropped.length === 0, JSON.stringify(dropped))
+
   // The relay must keep working after the breach.
   const sentinel = '0e0a0000-0000-4000-8000-000000000299'
   artists[0].ws.send(JSON.stringify({ v: 1, t: 'stroke_start', k: 'big', id: sentinel, userId: 'x', userName: 'x', color: '#30a46c', width: 4, pts: [5, 5] }))
-  await sleep(150)
+  await sleep(300)
   artists[0].ws.send(JSON.stringify({ v: 1, t: 'stroke_end', k: 'big', stroke: { id: sentinel, userId: 'x', userName: 'x', color: '#30a46c', width: 4, points: [5, 5, 6, 6] } }))
   const relayed = await w.waitFor((m) => m.t === 'stroke_end' && m.stroke?.id === sentinel)
   check('caps: a breach never stops the live relay (post-breach stroke broadcast)', !!relayed)
   const seenEnds = w.json().filter((m) => m.t === 'stroke_end').length
   check('caps: every stroke still reached the live watcher', seenEnds === 33, String(seenEnds))
+
+  // Which frames were lost? Pair every relayed stroke_start with its
+  // stroke_end by stroke id: a start without an end means the room never
+  // finished that stroke, an end without a start means the start itself was
+  // dropped. The ids name the artist and the stroke, so a failure says
+  // exactly which one went missing.
+  const startedIds = w.json().filter((m) => m.t === 'stroke_start').map((m) => m.id)
+  const endedIds = w.json().filter((m) => m.t === 'stroke_end').map((m) => m.stroke?.id)
+  const noEnd = startedIds.filter((id) => !endedIds.includes(id))
+  const noStart = endedIds.filter((id) => !startedIds.includes(id))
+  check('caps: every relayed stroke_start has its stroke_end', noEnd.length === 0 && noStart.length === 0,
+    JSON.stringify({ started: startedIds.length, ended: endedIds.length, noEnd, noStart }))
 
   const late = await connect(body.code, (await anonUser()).token)
   const snap = await late.waitFor((m) => m.t === 'snapshot')
