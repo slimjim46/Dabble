@@ -15,6 +15,7 @@ import { entryBytes, toSubmitShape } from './dailyLimits.js'
 import { attemptRemainingMs, humanCountdown, msToNextUtcMidnight } from './dailyTimer.js'
 import { DAILY_ATTEMPT_SECONDS, DAILY_FULL_MARGIN_BYTES, DAILY_MAX_ENTRY_BYTES } from './constants.js'
 import DailyPaper from './DailyPaper.jsx'
+import VoteGrid from './VoteGrid.jsx'
 
 const SUBMIT_BACKOFF_MS = [1000, 2000, 4000, 8000, 8000, 8000]
 
@@ -271,6 +272,13 @@ export default function DailyScreen() {
         <div className="daily-note">
           <p>Entry in review.</p>
           <p>Come back tomorrow to see and vote on entries.</p>
+        </div>
+      )}
+
+      {status === 'submitted' && (
+        <div className="daily-vote-section">
+          <h2 className="daily-heading">Vote on yesterday's entries</h2>
+          <VoteGrid supabase={supabase} />
         </div>
       )}
 

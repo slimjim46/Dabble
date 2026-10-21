@@ -74,3 +74,16 @@ export async function startDailyAttempt(supabase, promptId, { sentMs, receivedMs
 export async function submitDailyEntry(supabase, promptId, strokes) {
   return supabase.rpc('submit_daily_entry', { p_prompt_id: promptId, p_strokes: strokes })
 }
+
+export async function getDailyVoteGrid(supabase, { limit = 12, offset = 0 } = {}) {
+  const { data, error } = await supabase.rpc('get_daily_vote_grid', {
+    p_limit: limit,
+    p_offset: offset,
+  })
+  if (error) return { error }
+  return { data }
+}
+
+export async function voteDailyEntry(supabase, entryId) {
+  return supabase.rpc('vote_daily_entry', { p_entry_id: entryId })
+}
