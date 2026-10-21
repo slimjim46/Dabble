@@ -21,6 +21,7 @@ import { acceptPick, advance, newGameState, revealFrame, startGame, stateFrame, 
 import { sanitizeCustomWords } from '../rooms/src/words.js'
 import { MAX_NAME_LENGTH, PAPER_SIZE } from '../src/lib/constants.js'
 import { roomsEntryHref } from '../src/lib/roomsEntry.js'
+import { dailyEntryHref } from '../src/daily/dailyEntry.js'
 import { BRUSH_IDS, PALETTE, DEFAULT_COLOR, colorForKey } from '../src/lib/palette.js'
 import { encodePoints, quantize } from '../src/lib/strokeCodec.js'
 import { copyText } from '../src/rooms/roomsClipboard.js'
@@ -1306,6 +1307,13 @@ function sourceCode(rel) {
   check('entry: absent when there is no env object at all', roomsEntryHref(undefined) === null)
   check('entry: present when set, and links to /rooms',
     roomsEntryHref({ VITE_ROOMS_URL: 'https://example.invalid' }) === '/rooms')
+
+  // Daily challenge entry point (v2 Phase 5): same gate pattern.
+  check('daily entry: absent when VITE_DAILY_CHALLENGE is unset', dailyEntryHref({}) === null)
+  check('daily entry: absent when empty', dailyEntryHref({ VITE_DAILY_CHALLENGE: '' }) === null)
+  check('daily entry: absent when there is no env object at all', dailyEntryHref(undefined) === null)
+  check('daily entry: present when set, and links to /daily',
+    dailyEntryHref({ VITE_DAILY_CHALLENGE: '1' }) === '/daily')
 
   const pill = sourceCode('src/components/StatusPill.jsx')
   check('StatusPill: renders the link through the gated helper', pill.includes('roomsEntryHref(import.meta.env)'))
