@@ -1087,7 +1087,16 @@ export class Room {
     // window when their turn starts — but only if their seat is held, i.e.
     // they may still reconnect. A released seat cannot come back, so the
     // gameTick below skips that round at the very next alarm.
-    if (res.to === 'pick' && !this.isConnected(game.drawerUserId) && this.drawerSeatHeld(room, game.drawerUserId)) {
+    //
+    // The drawing phase counts too: a drawer who vanished during the pick
+    // phase is auto-picked, and beginDrawing() clears the grace. Without a
+    // fresh window the round would play out with nobody drawing and would
+    // never be skipped.
+    if (
+      (res.to === 'pick' || res.to === 'drawing') &&
+      !this.isConnected(game.drawerUserId) &&
+      this.drawerSeatHeld(room, game.drawerUserId)
+    ) {
       game.drawerGraceAt = now + times.drawerGrace
     }
     // Drawing just began: snapshot the non-drawer seats that are connected

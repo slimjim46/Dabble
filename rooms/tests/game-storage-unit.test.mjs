@@ -8,7 +8,7 @@ import { Room } from '../src/room.js'
 import { SCORE_DRAWER_PER_GUESSER, SCORE_GUESS_BASE } from '../src/config.js'
 import { newGameState, stateFrame } from '../src/game.js'
 import { roundKey } from '../src/round.js'
-import { check, summary } from './helpers.mjs'
+import { check, sleep, summary } from './helpers.mjs'
 
 const OPEN = 1
 const ENV = {
@@ -260,6 +260,58 @@ async function newRoom(seed = {}, env = ENV) {
   check('late: the chosen word is revealed', rev?.word === 'pizza', JSON.stringify(rev))
   check('late: the game still ends in the lobby (one player left)',
     r.game.phase === 'lobby', r.game.phase)
+}
+
+// ---- a drawing phase that starts without its drawer keeps a grace ---------
+{
+  // The drawer vanished during the PICK phase, so their seat is held and
+  // their grace is armed. The pick deadline then runs out and the round
+  // auto-picks: the drawing phase starts without its drawer. That phase must
+  // re-arm the grace, or the round plays out with nobody drawing and is never
+  // skipped.
+  const now = Date.now()
+  const game = {
+    ...newGameState(), gameSeq: 1, phase: 'pick', round: 1, rounds: 6,
+    order: ['u1', 'u2'], drawerUserId: 'u1', word: null,
+    options: ['pizza', 'apple', 'pear'], skipped: false,
+    phaseEndsAt: now - 1, deadlineAt: now - 1, // the pick deadline ran out
+    drawerGraceAt: now + 1000, // the drawer is still inside their grace
+  }
+  const seed = seededRoom(game)
+  seed.seats.u1.heldUntil = now + 60000 // their seat is held: they may return
+  const { state, room } = await newRoom({ room: seed })
+  const r = await room.load()
+  const peer = fakeSocket('u2')
+  state.sockets.push(peer) // u1 (the drawer) is gone
+  await room.alarm()
+  check('grace: the pick timeout starts a drawing phase', r.game.phase === 'drawing', r.game.phase)
+  check('grace: a drawing phase without its drawer re-arms the grace',
+    r.game.drawerGraceAt > 0, String(r.game.drawerGraceAt))
+  // The re-armed grace runs out (DRAWER_GRACE_MS is 1 s here): the round is
+  // skipped, not played out with nobody drawing.
+  await sleep(1100)
+  await room.alarm()
+  const rev = peer.frames.find((f) => f.t === 'reveal')
+  check('grace: the round is skipped once the re-armed grace runs out',
+    !!rev && rev.skipped === true, JSON.stringify(peer.frames.map((f) => f.t)))
+}
+
+// ---- a drawer who is present is unaffected by the grace ---------------------
+{
+  const now = Date.now()
+  const game = {
+    ...newGameState(), gameSeq: 1, phase: 'pick', round: 1, rounds: 6,
+    order: ['u1', 'u2'], drawerUserId: 'u1', word: null,
+    options: ['pizza', 'apple', 'pear'], skipped: false,
+    phaseEndsAt: now - 1, deadlineAt: now - 1,
+  }
+  const { state, room } = await newRoom({ room: seededRoom(game) })
+  const r = await room.load()
+  state.sockets.push(fakeSocket('u1'), fakeSocket('u2')) // the drawer is connected
+  await room.alarm()
+  check('grace: a present drawer gets no grace',
+    r.game.phase === 'drawing' && r.game.drawerGraceAt === 0,
+    JSON.stringify({ phase: r.game.phase, grace: r.game.drawerGraceAt }))
 }
 
 // ---- too few seats aborts, clears secrets, keeps the room -------------------

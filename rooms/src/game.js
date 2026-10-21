@@ -106,7 +106,7 @@ function beginPick(game, round, now, times, options) {
   game.skipped = false
   game.phaseStartedAt = now
   game.phaseEndsAt = now + times.pick
-  game.drawerGraceAt = 0
+  game.drawerGraceAt = 0 // the Room re-arms it if this phase starts without its drawer
   setDeadline(game)
 }
 
@@ -152,7 +152,7 @@ function beginDrawing(game, word, now, times) {
   game.skipped = false
   game.phaseStartedAt = now
   game.phaseEndsAt = now + times.drawing
-  game.drawerGraceAt = 0
+  game.drawerGraceAt = 0 // the Room re-arms it if this phase starts without its drawer
   setDeadline(game)
 }
 
