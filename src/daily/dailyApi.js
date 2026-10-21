@@ -87,3 +87,9 @@ export async function getDailyVoteGrid(supabase, { limit = 12, offset = 0 } = {}
 export async function voteDailyEntry(supabase, entryId) {
   return supabase.rpc('vote_daily_entry', { p_entry_id: entryId })
 }
+
+export async function getDailyWinners(supabase, { limit = 10 } = {}) {
+  const { data, error } = await supabase.rpc('get_daily_winners', { p_limit: limit })
+  if (error) return { error }
+  return { data: Array.isArray(data) ? data : [] }
+}

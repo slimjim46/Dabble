@@ -218,6 +218,9 @@ export default function DailyScreen() {
           {status === 'ready' && <span className="daily-note">2 minutes, one try</span>}
         </div>
         <div className="daily-bar">
+          <button type="button" className="daily-link" onClick={() => { window.history.pushState({}, '', '/daily/gallery'); window.dispatchEvent(new PopStateEvent('popstate')) }}>
+            Gallery
+          </button>
           <button type="button" className="daily-link" onClick={leave}>
             Back
           </button>

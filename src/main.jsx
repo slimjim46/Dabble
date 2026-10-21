@@ -10,6 +10,7 @@ import './index.css'
 const AdminApp = lazy(() => import('./admin/AdminApp.jsx'))
 const RoomsApp = lazy(() => import('./rooms/RoomsApp.jsx'))
 const DailyApp = lazy(() => import('./daily/DailyApp.jsx'))
+const DailyGalleryApp = lazy(() => import('./daily/DailyGallery.jsx'))
 
 // App-shell service worker (PWA). Registered from here rather than from an
 // inline script in index.html, so the document has no script outside <body>.
@@ -22,7 +23,7 @@ if ('serviceWorker' in navigator) {
 const pathname = window.location.pathname
 const isAdminRoute = pathname.startsWith('/admin')
 const isRoomsRoute = pathname === '/rooms' || pathname.startsWith('/rooms/') || pathname.startsWith('/r/')
-const isDailyRoute = pathname === '/daily'
+const isDailyRoute = pathname === '/daily' || pathname === '/daily/gallery'
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
@@ -32,7 +33,7 @@ ReactDOM.createRoot(document.getElementById('root')).render(
       </Suspense>
     ) : isDailyRoute ? (
       <Suspense fallback={<div className="admin-loading">Loading…</div>}>
-        <DailyApp />
+        {pathname === '/daily/gallery' ? <DailyGalleryApp /> : <DailyApp />}
       </Suspense>
     ) : isRoomsRoute ? (
       <Suspense fallback={<div className="admin-loading">Loading…</div>}>
