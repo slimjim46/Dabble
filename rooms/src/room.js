@@ -379,6 +379,13 @@ export class Room {
       return
     }
 
+    // A drawer who is gone: evaluate the round skip BEFORE the seat release
+    // below. The platform can deliver an alarm seconds late; if the release
+    // ran first the room would drop below MIN_PLAYERS and the game would
+    // abort to the lobby, so the round would never be skipped and no reveal
+    // would be sent.
+    await this.skipAbsentDrawer(room, now)
+
     // Seat holds: release expired seats with a leave event.
     const released = []
     for (const [uid, seat] of Object.entries(room.seats)) {
@@ -1007,6 +1014,39 @@ export class Room {
   }
 
   /**
+   * Skip the round of a drawer who is gone. Returns true when the round was
+   * skipped.
+   *
+   * The drawer is gone and either their seat is released (kicked, or the hold
+   * expired: they cannot return) or an in-progress grace has run out. A held
+   * seat still inside its grace keeps waiting, and a drawer who was never
+   * connected falls through to the phase deadline, so an expired pick still
+   * auto-picks and an expired drawing still reveals.
+   *
+   * The room must still be able to play a round: below MIN_PLAYERS the game
+   * goes back to the lobby instead (the spec: "too few players (back to the
+   * lobby)"). The seats are counted BEFORE the expired seats are released, so
+   * an alarm that arrives late (the platform can deliver one seconds late)
+   * still skips the round instead of dropping the room below MIN_PLAYERS and
+   * aborting it.
+   */
+  async skipAbsentDrawer(room, now) {
+    const game = room.game
+    if (!game || !isDrawerPhase(game.phase)) return false
+    if (this.isConnected(game.drawerUserId)) return false
+    if (Object.keys(room.seats).length < MIN_PLAYERS) return false
+    const released = !this.drawerSeatHeld(room, game.drawerUserId)
+    const graceOver = !!game.drawerGraceAt && now >= game.drawerGraceAt
+    if (!released && !graceOver) return false
+    const from = game.phase
+    game.drawerGraceAt = 0
+    const times = gameTimings(this.env)
+    skipRound(game, now, times)
+    await this.afterGameStep(room, { from, to: game.phase, event: 'drawer_absent' }, times)
+    return true
+  }
+
+  /**
    * One alarm step for the game. A vanished drawer never stalls a round:
    * if their seat is held they get `drawerGrace` to reconnect, and if the
    * seat is already released the round is skipped at the next alarm. Hints
@@ -1017,27 +1057,16 @@ export class Room {
     if (!game || game.phase === 'lobby') return
     const times = gameTimings(this.env)
 
+    // The skip is evaluated before the too-few-players abort: the room can
+    // still play the round at this point, and a late alarm must not turn a
+    // skippable round into an aborted game.
+    if (await this.skipAbsentDrawer(room, now)) return
+
     if (Object.keys(room.seats).length < MIN_PLAYERS) {
       await this.abortGame(room, now)
       return
     }
 
-    // Drawer absent, and either their seat is released (kicked, or the hold
-    // expired: they cannot return) or an in-progress grace has run out: skip
-    // the round now. A held seat still inside its grace keeps waiting; a
-    // drawer who was never connected falls through to the deadline below, so
-    // an expired pick still auto-picks and an expired drawing still reveals.
-    if (isDrawerPhase(game.phase) && !this.isConnected(game.drawerUserId)) {
-      const released = !this.drawerSeatHeld(room, game.drawerUserId)
-      const graceOver = !!game.drawerGraceAt && now >= game.drawerGraceAt
-      if (released || graceOver) {
-        game.drawerGraceAt = 0
-        const from = game.phase
-        skipRound(game, now, times)
-        await this.afterGameStep(room, { from, to: game.phase, event: 'drawer_absent' }, times)
-        return
-      }
-    }
     if (game.drawerGraceAt && now >= game.drawerGraceAt) game.drawerGraceAt = 0
 
     if (!game.deadlineAt || now < game.deadlineAt) return

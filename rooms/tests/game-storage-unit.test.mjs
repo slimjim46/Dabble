@@ -233,6 +233,35 @@ async function newRoom(seed = {}, env = ENV) {
   check('grace: the skipped reveal is broadcast', rev?.skipped === true && rev?.word === 'pizza')
 }
 
+// ---- a late alarm still skips the round (the seat hold expired too) ---------
+{
+  // The platform can deliver an alarm seconds late. If the drawer's seat
+  // hold expires in the meantime, the release runs first, the room drops
+  // below MIN_PLAYERS and the game aborts to the lobby: the round is never
+  // skipped and no reveal is sent. The skip must be evaluated BEFORE the
+  // release, so a late alarm still skips the round.
+  const now = Date.now()
+  const game = {
+    ...newGameState(), gameSeq: 1, phase: 'drawing', round: 1, rounds: 6,
+    order: ['u1', 'u2'], drawerUserId: 'u1', word: 'pizza', skipped: false,
+    hintAts: [now + 100000], phaseEndsAt: now + 100000, deadlineAt: now + 100000,
+    drawerGraceAt: now - 1, // the drawer grace ran out
+  }
+  const seed = seededRoom(game)
+  seed.seats.u1.heldUntil = now - 1 // the seat hold ran out too
+  const { state, room } = await newRoom({ room: seed })
+  const r = await room.load()
+  const peer = fakeSocket('u2')
+  state.sockets.push(peer) // u1 (the drawer) is gone
+  await room.alarm()
+  const rev = peer.frames.find((f) => f.t === 'reveal')
+  check('late: the round is skipped even when the seat hold also expired',
+    !!rev && rev.skipped === true, JSON.stringify(peer.frames.map((f) => f.t)))
+  check('late: the chosen word is revealed', rev?.word === 'pizza', JSON.stringify(rev))
+  check('late: the game still ends in the lobby (one player left)',
+    r.game.phase === 'lobby', r.game.phase)
+}
+
 // ---- too few seats aborts, clears secrets, keeps the room -------------------
 {
   const game = {
