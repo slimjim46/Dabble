@@ -15,11 +15,13 @@ import { BRUSH_IDS, PALETTE } from '../lib/palette.js'
 import { encodePoints, quantize } from '../lib/strokeCodec.js'
 import {
   MAX_FINAL_POINT_NUMBERS,
+  MAX_CUSTOM_WORDS,
   MAX_GUESS_LENGTH,
   MAX_LIVE_BATCH_NUMBERS,
   MAX_PLAYERS,
   MAX_ROUND_STROKES,
   MAX_WORD_LENGTH,
+  MIN_WORD_LENGTH,
   PHASES,
   ROOM_CODE_RE,
   WORD_OPTIONS,
@@ -493,4 +495,75 @@ export async function probeRoom({ roomsUrl, code, auth, fetchImpl = globalThis.f
     players: typeof result.body?.players === 'number' ? result.body.players : 0,
     full: result.body?.full === true,
   }
+}
+
+// ---- custom words (v2 Phase 4) ----------------------------------------------
+// The host sets the room's word list over HTTP (the filter needs the player's
+// JWT, so it runs in the Worker, not over the socket). This mirrors the
+// server's shape rule so a malformed list never leaves the client; the blocked
+// check is the server's alone. tests/roomClient.test.mjs asserts this sanitizer
+// agrees with rooms/src/words.js on the same inputs.
+
+const CUSTOM_WORD_RE = /^[a-z]{3,40}$/
+
+/** A cleaned distinct word list, or null when malformed (server-side mirror). */
+export function sanitizeWordInput(input) {
+  if (!Array.isArray(input)) return null
+  if (input.length < WORD_OPTIONS || input.length > MAX_CUSTOM_WORDS) return null
+  const seen = new Set()
+  const out = []
+  for (const raw of input) {
+    if (typeof raw !== 'string') return null
+    if (raw.length < MIN_WORD_LENGTH || raw.length > MAX_WORD_LENGTH || !CUSTOM_WORD_RE.test(raw)) return null
+    if (seen.has(raw)) return null
+    seen.add(raw)
+    out.push(raw)
+  }
+  return out
+}
+
+/**
+ * POST /rooms/<CODE>/words — host sets custom words.
+ * @returns {ok: true, count} | {ok: false, error}
+ */
+export async function setRoomWords({ roomsUrl, code, words, auth, fetchImpl = globalThis.fetch }) {
+  if (!ROOM_CODE_RE.test(code)) return { ok: false, error: 'bad_code' }
+  const clean = sanitizeWordInput(words)
+  if (!clean) return { ok: false, error: 'bad_words' }
+
+  let token = await auth.getToken()
+  if (!token) return { ok: false, error: 'auth' }
+
+  const post = (t) =>
+    fetchImpl(`${roomsUrl}/rooms/${encodeURIComponent(code)}/words`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${t}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ words: clean }),
+    })
+
+  let response
+  try {
+    response = await post(token)
+    if (response.status === 401) {
+      token = await auth.refresh()
+      if (!token) return { ok: false, error: 'auth' }
+      response = await post(token)
+    }
+  } catch {
+    return { ok: false, error: 'unreachable' }
+  }
+
+  const body = await response.json().catch(() => null)
+  if (!response.ok) {
+    let error = 'unreachable'
+    if (response.status === 422) error = 'word_rejected'
+    else if (response.status === 409) error = 'not_in_lobby'
+    else if (response.status === 403) error = 'not_host'
+    else if (response.status === 400) error = 'bad_words'
+    else if (response.status === 401) error = 'auth'
+    else if (response.status === 429) error = 'rate_limited'
+    else if (response.status === 503) error = 'busy'
+    return { ok: false, error }
+  }
+  return { ok: true, count: typeof body?.count === 'number' ? body.count : clean.length }
 }

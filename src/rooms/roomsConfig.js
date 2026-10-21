@@ -50,6 +50,13 @@ export const MIN_PLAYERS = 2
 export const WORD_OPTIONS = 3
 export const MAX_WORD_LENGTH = 40
 
+// ---- custom words (v2 Phase 4) ---------------------------------------------
+// Must equal MAX_CUSTOM_WORDS / MIN_WORD_LENGTH in rooms/src/config.js;
+// tests/roomClient.test.mjs asserts the pairs. The host sets words in the
+// lobby; they go through the server's blocked-word filter before use.
+export const MAX_CUSTOM_WORDS = 20
+export const MIN_WORD_LENGTH = 3
+
 // ---- guessing (v2 Phase 3 step 4a) -----------------------------------------
 // Must equal MAX_GUESS_LENGTH / MAX_GUESSES_PER_ROUND and the CLOSE_* values
 // in rooms/src/config.js; tests/roomClient.test.mjs asserts every pair.

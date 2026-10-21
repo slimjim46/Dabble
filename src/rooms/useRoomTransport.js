@@ -19,6 +19,7 @@ import {
   parseRoomMessage,
   pickMessage,
   probeRoom,
+  setRoomWords,
   startMessage,
   strokeCancelMessage,
   strokeEndMessage,
@@ -481,6 +482,12 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
       pick(i) {
         send(pickMessage(i))
       },
+      // Custom words (v2 Phase 4): host-set over HTTP (the filter runs in the
+      // Worker with our JWT), not over the socket. Resolves the outcome so the
+      // screen can show a success/rejection message.
+      async setWords(words) {
+        return setRoomWords({ roomsUrl, code, words, auth })
+      },
       guess(text) {
         const t = typeof text === 'string' ? text.trim() : ''
         if (t.length === 0 || t.length > MAX_GUESS_LENGTH) return
@@ -513,7 +520,7 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
         run(1)
       },
     }
-  }, [send, run, applyStatus])
+  }, [send, run, applyStatus, roomsUrl, code, auth])
 
   // ---- start / stop --------------------------------------------------------
   useEffect(() => {

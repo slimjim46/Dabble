@@ -18,6 +18,7 @@ import { PAPER_SIZE as SERVER_PAPER_SIZE } from '../rooms/src/config.js'
 import * as serverConfig from '../rooms/src/config.js'
 import { CLIENT_TYPES, buildSnapshot, parseEnvelope } from '../rooms/src/wire.js'
 import { acceptPick, advance, newGameState, revealFrame, startGame, stateFrame, wordPickFrame, yourWordFrame } from '../rooms/src/game.js'
+import { sanitizeCustomWords } from '../rooms/src/words.js'
 import { MAX_NAME_LENGTH, PAPER_SIZE } from '../src/lib/constants.js'
 import { roomsEntryHref } from '../src/lib/roomsEntry.js'
 import { BRUSH_IDS, PALETTE, DEFAULT_COLOR, colorForKey } from '../src/lib/palette.js'
@@ -30,6 +31,7 @@ import {
   CLOSE_DISTANCE_NEAR,
   CLOSE_MAX_LENGTH_FOR_DISTANCE_1,
   FATAL_CLOSE_CODES,
+  MAX_CUSTOM_WORDS,
   MAX_GUESSES_PER_ROUND,
   MAX_GUESS_LENGTH,
   MAX_RECONNECT_ATTEMPTS,
@@ -39,6 +41,7 @@ import {
   MAX_WORD_LENGTH,
   MIN_CLOSE_LENGTH,
   MIN_PLAYERS,
+  MIN_WORD_LENGTH,
   PERFECT_MIN_GUESSERS,
   PHASES,
   ROOM_CODE_RE,
@@ -71,6 +74,8 @@ import {
   parseRoomMessage,
   pickMessage,
   probeRoom,
+  sanitizeWordInput,
+  setRoomWords,
   startMessage,
   strokeCancelMessage,
   strokeEndMessage,
@@ -378,6 +383,8 @@ for (const [type, message] of outbound) {
     ['MIN_PLAYERS', MIN_PLAYERS, serverConfig.MIN_PLAYERS],
     ['WORD_OPTIONS', WORD_OPTIONS, serverConfig.WORD_OPTIONS],
     ['MAX_WORD_LENGTH', MAX_WORD_LENGTH, serverConfig.MAX_WORD_LENGTH],
+    ['MAX_CUSTOM_WORDS', MAX_CUSTOM_WORDS, serverConfig.MAX_CUSTOM_WORDS],
+    ['MIN_WORD_LENGTH', MIN_WORD_LENGTH, serverConfig.MIN_WORD_LENGTH],
     ['PHASES', JSON.stringify(PHASES), JSON.stringify(serverConfig.PHASES)],
     ['MAX_GUESS_LENGTH', MAX_GUESS_LENGTH, serverConfig.MAX_GUESS_LENGTH],
     ['MAX_GUESSES_PER_ROUND', MAX_GUESSES_PER_ROUND, serverConfig.MAX_GUESSES_PER_ROUND],
@@ -799,6 +806,61 @@ const recorder = (queue) => {
 }
 
 // ===========================================================================
+// 8b. Custom words (v2 Phase 4): the client sanitizer mirrors the server's,
+//     and setRoomWords posts the list over HTTP so the Worker can filter it
+//     with the player's own JWT.
+// ===========================================================================
+{
+  const cases = [
+    [['dog', 'cat', 'house'], ['dog', 'cat', 'house']],
+    [['Dog', 'cat', 'house'], null],
+    [['dog', 'cat'], null],
+    [['dog', 'cat', 'house', 'x'.repeat(41)], null],
+    [['ab', 'cat', 'house'], null],
+    [['dog', 'cat', 'cat'], null],
+    [['has space', 'cat', 'house'], null],
+    ['not-an-array', null],
+  ]
+  for (const [input, expected] of cases) {
+    const got = sanitizeWordInput(input)
+    const server = sanitizeCustomWords(input)
+    const agree = (got === null) === (server === null) && (got === null || JSON.stringify(got) === JSON.stringify(server))
+    const matchExpected = expected === null ? got === null : JSON.stringify(got) === JSON.stringify(expected)
+    check(`words: sanitizer mirrors the server on ${JSON.stringify(input)}`,
+      agree && matchExpected, JSON.stringify({ got, server }))
+  }
+
+  {
+    const fetchImpl = recorder([response(200, { ok: true, count: 3 })])
+    const out = await setRoomWords({ roomsUrl: 'https://rooms.test', code: 'ABCDE', words: ['dog', 'cat', 'house'], auth: makeAuth(['t1']), fetchImpl })
+    check('words: setRoomWords returns ok and the count', out.ok === true && out.count === 3, JSON.stringify(out))
+    check('words: setRoomWords posts the list to /rooms/<code>/words with the bearer token',
+      fetchImpl.calls.length === 1 &&
+      fetchImpl.calls[0].url === 'https://rooms.test/rooms/ABCDE/words' &&
+      fetchImpl.calls[0].init.method === 'POST' &&
+      fetchImpl.calls[0].init.headers.Authorization === 'Bearer t1' &&
+      JSON.parse(fetchImpl.calls[0].init.body).words.join() === 'dog,cat,house',
+      JSON.stringify(fetchImpl.calls[0]))
+  }
+  {
+    const fetchImpl = recorder([response(422, { error: 'word_rejected' })])
+    const out = await setRoomWords({ roomsUrl: 'https://rooms.test', code: 'ABCDE', words: ['dog', 'cat', 'house'], auth: makeAuth(['t1']), fetchImpl })
+    check('words: a 422 maps to word_rejected', out.ok === false && out.error === 'word_rejected', JSON.stringify(out))
+  }
+  {
+    const fetchImpl = recorder([])
+    const out = await setRoomWords({ roomsUrl: 'https://rooms.test', code: 'ABCDE', words: ['dog', 'cat'], auth: makeAuth(['t1']), fetchImpl })
+    check('words: a too-short list is rejected before any request',
+      out.ok === false && out.error === 'bad_words' && fetchImpl.calls.length === 0, JSON.stringify(out))
+  }
+  {
+    const fetchImpl = recorder([new Error('network down')])
+    const out = await setRoomWords({ roomsUrl: 'https://rooms.test', code: 'ABCDE', words: ['dog', 'cat', 'house'], auth: makeAuth(['t1']), fetchImpl })
+    check('words: a network failure is unreachable, not a throw', out.ok === false && out.error === 'unreachable', JSON.stringify(out))
+  }
+}
+
+// ===========================================================================
 // 9. Clipboard, secure context or not.
 // ===========================================================================
 {
@@ -1080,6 +1142,11 @@ function sourceCode(rel) {
   check('transport: sends pick through the shared builder', transport.includes('pickMessage('))
   check('transport: sends guess through the shared builder', transport.includes('guessMessage('))
   check('transport: applies the guess_ack frame', transport.includes("case 'guess_ack'"))
+  // Custom words go over HTTP (the filter needs the JWT), never the socket.
+  check('transport: sets custom words through setRoomWords, not the socket',
+    transport.includes('setRoomWords(') && !transport.includes("'set_words'"))
+  check('RoomScreen: the custom-word control is host-only in the lobby',
+    screen.includes('CustomWords') && screen.includes('game.phase === \'lobby\'') && screen.includes('isHost'))
   // The reveal ends the drawing phase: the drawer's dangling live line must be
   // dropped then (the server ignores a late stroke_end once mayDraw flips), so
   // the reveal case clears live strokes before rendering.

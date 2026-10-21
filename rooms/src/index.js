@@ -12,6 +12,7 @@
 import { verifyAccessToken } from './auth.js'
 import { isValidCode, randomCode } from './codes.js'
 import { CREATE_CODE_ATTEMPTS, MAX_ROOMS_PER_USER_PER_HOUR, maxRoomsPerIpPerHour } from './config.js'
+import { wordAllowed } from './filter.js'
 import { buildJoinHeaders } from './forward.js'
 import { clientIpHash, ipHashSaltOk } from './hash.js'
 import { fetchIdentity } from './identity.js'
@@ -19,6 +20,7 @@ import { Limiter } from './limiter.js'
 import { logEvent } from './log.js'
 import { Room } from './room.js'
 import { verifyTurnstile } from './turnstile.js'
+import { sanitizeCustomWords } from './words.js'
 
 export { Limiter, Room }
 
@@ -362,6 +364,90 @@ async function roomStatus(request, env, url) {
   }
 }
 
+/**
+ * POST /rooms/<CODE>/words — the host sets the room's custom words (v2 Phase
+ * 4c). The Worker holds the player's JWT, so the blocked-word filter runs
+ * HERE: every word is checked against public.is_word_allowed with the player's
+ * own token before the surviving list is forwarded to the DO. The DO never
+ * sees a token, and a client-supplied header can never bypass the filter.
+ */
+async function setRoomWords(request, env, url) {
+  if (!ipHashSaltOk(env)) {
+    logEvent('prod_salt_missing', { route: 'words' })
+    return roomsBusy('words')
+  }
+
+  const parts = url.pathname.split('/')
+  const code = (parts[2] || '').toUpperCase()
+  if (parts.length !== 4 || parts[3] !== 'words' || !isValidCode(code)) {
+    logEvent('probe_bad_format', { route: 'words' })
+    return json(400, { error: 'bad_room_code' })
+  }
+
+  const origin = checkOrigin(request, env)
+  const cors = corsHeaders(origin.origin, origin.ok)
+  if (!origin.ok) {
+    logEvent('origin_rejected', { route: 'words' })
+    return json(403, { error: 'origin' }, cors)
+  }
+
+  const token = await readBearer(request)
+  const claims = token ? await verifyAccessToken(token, env) : null
+  if (!claims || typeof claims.sub !== 'string') {
+    logEvent('words_unauth')
+    return json(401, { error: 'unauthorized' }, cors)
+  }
+
+  const ipHash = await clientIpHash(request, env)
+  const allowed = await rateLimitJoin(env, claims.sub, ipHash)
+  if (!allowed) {
+    logEvent('words_rate_limited')
+    return json(429, { error: 'rate_limited' }, { ...cors, 'retry-after': '60' })
+  }
+
+  const identity = await fetchIdentity(claims.sub, token, env)
+  if (identity.banned) {
+    logEvent('banned_reject', { route: 'words' })
+    return json(403, { error: 'banned' }, cors)
+  }
+
+  let body = null
+  try {
+    body = await request.json()
+  } catch {}
+
+  const words = sanitizeCustomWords(body?.words)
+  if (!words) {
+    logEvent('words_bad_shape')
+    return json(400, { error: 'bad_words' }, cors)
+  }
+
+  // Filter each word. Fail closed: an unverified word is rejected. No word is
+  // ever logged or returned to the client.
+  for (const word of words) {
+    if (!(await wordAllowed(word, token, env))) {
+      logEvent('word_rejected')
+      return json(422, { error: 'word_rejected' }, cors)
+    }
+  }
+
+  if (quotaSimulated(env)) return roomsBusy('words')
+
+  try {
+    const stub = env.ROOM.get(env.ROOM.idFromName(code))
+    const res = await stub.fetch('https://room/words', {
+      method: 'POST',
+      headers: { 'X-User': claims.sub },
+      body: JSON.stringify({ words }),
+    })
+    const resBody = await res.text()
+    return new Response(resBody, { status: res.status, headers: { ...JSON_HEADERS, ...cors } })
+  } catch (e) {
+    logEvent('do_fetch_error', { route: 'words', err: errName(e) })
+    return roomsBusy('words')
+  }
+}
+
 export default {
   async fetch(request, env) {
     const url = new URL(request.url)
@@ -384,6 +470,7 @@ export default {
         return new Response(null, { status: 204, headers: corsHeaders(origin.origin, true) })
       }
       if (method === 'GET') return roomStatus(request, env, url)
+      if (method === 'POST') return setRoomWords(request, env, url)
       return json(405, { error: 'method_not_allowed' })
     }
 

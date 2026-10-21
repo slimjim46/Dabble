@@ -12,6 +12,20 @@ import { useRoomTransport } from './useRoomTransport.js'
 
 const RETRYABLE = new Set(RETRYABLE_ERRORS)
 
+// Set-words failures (v2 Phase 4) are a separate, non-transport flow, so their
+// copy lives here rather than in roomsErrors.js (whose coverage test only knows
+// the probe/close surfaces).
+const WORDS_ERROR_COPY = {
+  word_rejected: 'A word was blocked. Try different words.',
+  bad_words: 'Words must be 3–40 letters (a–z), no duplicates.',
+  not_in_lobby: 'Words can only be set before the game starts.',
+  not_host: 'Only the host can set words.',
+  rate_limited: 'Too many changes. Try again shortly.',
+  busy: 'The rooms server is busy. Try again in a moment.',
+  auth: 'Could not sign you in. Try reloading the page.',
+  unreachable: 'Cannot reach the rooms server.',
+}
+
 export default function RoomScreen({ roomsUrl, code, onLeave }) {
   const store = useMemo(() => createStrokeStore(), [])
   const cursors = useMemo(() => createCursorStore(), [])
@@ -21,6 +35,8 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
   const [copied, setCopied] = useState(false)
   const [panelOpen, setPanelOpen] = useState(false)
   const [kickToast, setKickToast] = useState(null)
+  const [wordsDraft, setWordsDraft] = useState('')
+  const [wordsToast, setWordsToast] = useState(null)
   const codeRef = useRef(null)
 
   const { api, status, ready, error, players, seat, isHost, kickNotice, game, wordPick, yourWord, reveal, guessAck, guessNotice } =
@@ -90,6 +106,24 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
     onLeave()
   }
 
+  const submitWords = async () => {
+    const parsed = wordsDraft
+      .split(/[\s,]+/)
+      .map((w) => w.trim().toLowerCase())
+      .filter(Boolean)
+    if (parsed.length === 0) {
+      setWordsToast('Enter at least 3 words, separated by commas.')
+      return
+    }
+    const result = await api.setWords(parsed)
+    if (result.ok) {
+      setWordsDraft('')
+      setWordsToast(`Custom words set (${result.count}).`)
+    } else {
+      setWordsToast(WORDS_ERROR_COPY[result.error] ?? 'Could not set words.')
+    }
+  }
+
   const isError = status === 'error' && error
 
   return (
@@ -123,6 +157,10 @@ export default function RoomScreen({ roomsUrl, code, onLeave }) {
             reveal={reveal}
             onStart={() => api.start()}
             onPick={(i) => api.pick(i)}
+            wordsDraft={wordsDraft}
+            onWordsChange={setWordsDraft}
+            onSetWords={submitWords}
+            wordsToast={wordsToast}
           />
         </div>
 
@@ -410,6 +448,49 @@ function GuessBar({ canGuess, haveGuessed, ack, notice, correctNames, onGuess })
 }
 
 /**
+ * The host's custom-word control (v2 Phase 4). The words go to the server over
+ * HTTP (the blocked-word filter runs in the Worker with the host's JWT), and
+ * the server's shape rule is mirrored client-side so a malformed list is never
+ * sent. The toast carries either the success count or a rejection reason.
+ */
+function CustomWords({ draft, onChange, onSubmit, toast }) {
+  const [open, setOpen] = useState(false)
+
+  if (!open) {
+    return (
+      <button type="button" className="room-pill-button" onClick={() => setOpen(true)}>
+        Custom words
+      </button>
+    )
+  }
+
+  return (
+    <div className="custom-words">
+      <input
+        className="game-guess-input"
+        type="text"
+        value={draft}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder="3–20 words, comma-separated"
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        enterKeyHint="done"
+        aria-label="Custom words"
+      />
+      <button type="button" className="room-primary" onClick={onSubmit}>
+        Set
+      </button>
+      <button type="button" className="room-pill-button" onClick={() => setOpen(false)}>
+        Close
+      </button>
+      {toast && <span className="game-note">{toast}</span>}
+    </div>
+  )
+}
+
+/**
  * The header above the paper. It renders server frames only: no timer
  * authority, no locally invented word, and no scores the server did not send.
  * Scoreboards (v2 Phase 3) come from `state.scores` and `reveal.gains` via
@@ -428,6 +509,10 @@ function GameHeader({
   reveal,
   onStart,
   onPick,
+  wordsDraft,
+  onWordsChange,
+  onSetWords,
+  wordsToast,
 }) {
   if (!ready || !game) return null
 
@@ -435,9 +520,17 @@ function GameHeader({
     return (
       <div className="game-header">
         {isHost ? (
-          <button type="button" className="room-primary" disabled={playerCount < MIN_PLAYERS} onClick={onStart}>
-            {playerCount < MIN_PLAYERS ? `Waiting for players (${playerCount}/${MIN_PLAYERS})` : 'Play'}
-          </button>
+          <>
+            <button type="button" className="room-primary" disabled={playerCount < MIN_PLAYERS} onClick={onStart}>
+              {playerCount < MIN_PLAYERS ? `Waiting for players (${playerCount}/${MIN_PLAYERS})` : 'Play'}
+            </button>
+            <CustomWords
+              draft={wordsDraft}
+              onChange={onWordsChange}
+              onSubmit={onSetWords}
+              toast={wordsToast}
+            />
+          </>
         ) : (
           <span className="game-note">Waiting for the host to start…</span>
         )}

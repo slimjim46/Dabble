@@ -29,7 +29,7 @@ import {
   yourWordFrame,
   hintFor,
 } from '../src/game.js'
-import { pickWords, WORDS } from '../src/words.js'
+import { pickFromPool, pickOptions, pickWords, sanitizeCustomWords, WORDS } from '../src/words.js'
 import { check, summary } from './helpers.mjs'
 
 const TIMES = { pick: 10000, drawing: 60000, reveal: 8000, scores: 8000, gameOver: 30000, drawerGrace: 10000 }
@@ -53,14 +53,59 @@ const PLAYERS = ['u1', 'u2', 'u3']
 
 // ---- words ------------------------------------------------------------------
 {
+  const DIFFS = ['easy', 'medium', 'hard']
+  const words = WORDS.map((e) => e.word)
   check('words: at least 50 prompts', WORDS.length >= 50, String(WORDS.length))
-  check('words: all lowercase single tokens', WORDS.every((w) => /^[a-z]+$/.test(w)))
-  check('words: no duplicates', new Set(WORDS).size === WORDS.length)
+  check('words: every entry has a word, category and difficulty',
+    WORDS.every((e) => typeof e.word === 'string' && typeof e.category === 'string' && DIFFS.includes(e.difficulty)))
+  check('words: all lowercase single tokens', words.every((w) => /^[a-z]+$/.test(w)))
+  check('words: no duplicate words', new Set(words).size === words.length)
   check('words: frozen', Object.isFrozen(WORDS))
+  check('words: every difficulty bucket is non-empty',
+    DIFFS.every((d) => WORDS.some((e) => e.difficulty === d)))
   const picked = pickWords(WORD_OPTIONS, () => 0.5)
   check(`words: pickWords returns ${WORD_OPTIONS} distinct`, picked.length === WORD_OPTIONS && new Set(picked).size === WORD_OPTIONS, JSON.stringify(picked))
   check('words: pickWords is deterministic with an injected rng',
     JSON.stringify(pickWords(3, () => 0)) === JSON.stringify(pickWords(3, () => 0)))
+  // Mixed difficulty: a 3-pick spreads one word across each difficulty bucket.
+  const byDiff = {}
+  for (const w of picked) {
+    const d = WORDS.find((e) => e.word === w).difficulty
+    byDiff[d] = (byDiff[d] || 0) + 1
+  }
+  check('words: a 3-pick mixes all three difficulties',
+    byDiff.easy === 1 && byDiff.medium === 1 && byDiff.hard === 1, JSON.stringify(picked))
+}
+
+// ---- custom words (v2 Phase 4) ----------------------------------------------
+{
+  // sanitizeCustomWords: shape, length, token form and duplicates.
+  check('custom: a valid list is kept in order', JSON.stringify(sanitizeCustomWords(['dog', 'cat', 'house'])) === '["dog","cat","house"]')
+  check('custom: under the minimum is rejected', sanitizeCustomWords(['dog', 'cat']) === null)
+  check('custom: over the maximum is rejected', sanitizeCustomWords(Array.from({ length: 21 }, (_, i) => `word${i}`)) === null)
+  check('custom: a too-short word is rejected', sanitizeCustomWords(['ab', 'cat', 'house']) === null)
+  check('custom: an over-long word is rejected', sanitizeCustomWords(['x'.repeat(41), 'cat', 'house']) === null)
+  check('custom: a non-token word is rejected', sanitizeCustomWords(['has space', 'cat', 'house']) === null)
+  check('custom: uppercase is rejected', sanitizeCustomWords(['Dog', 'cat', 'house']) === null)
+  check('custom: duplicates are rejected', sanitizeCustomWords(['dog', 'dog', 'house']) === null)
+  check('custom: a non-array is rejected', sanitizeCustomWords('nope') === null)
+
+  // pickFromPool draws distinct words uniformly.
+  const pool = ['dog', 'cat', 'house', 'bird', 'tree']
+  const fromPool = pickFromPool(pool, 3, () => 0)
+  check('custom: pickFromPool returns 3 distinct', fromPool.length === 3 && new Set(fromPool).size === 3, JSON.stringify(fromPool))
+  check('custom: pickFromPool is deterministic with an injected rng',
+    JSON.stringify(pickFromPool(pool, 3, () => 0)) === JSON.stringify(pickFromPool(pool, 3, () => 0)))
+
+  // pickOptions uses custom words when there are enough, else curated.
+  const custom = ['dog', 'cat', 'house']
+  const viaCustom = pickOptions(custom, 3, () => 0)
+  check('custom: pickOptions draws from custom words when present',
+    viaCustom.length === 3 && viaCustom.every((w) => custom.includes(w)), JSON.stringify(viaCustom))
+  check('custom: pickOptions falls back to curated when too few',
+    pickOptions(['dog', 'cat'], 3, () => 0).every((w) => !['dog', 'cat'].includes(w)))
+  check('custom: pickOptions falls back to curated when null',
+    pickOptions(null, 3, () => 0).length === 3)
 }
 
 // ---- start -> pick ----------------------------------------------------------

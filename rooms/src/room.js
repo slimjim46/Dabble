@@ -52,7 +52,7 @@ import {
 } from './game.js'
 import { logDiag, logEvent } from './log.js'
 import { countRoundPoints, recordRoundStroke, roundFits, roundKey, roundPrefix } from './round.js'
-import { pickWords } from './words.js'
+import { pickOptions, sanitizeCustomWords } from './words.js'
 import { buildSnapshot, CLIENT_TYPES, STROKE_TYPES, parseEnvelope } from './wire.js'
 
 const OPEN = 1 // WebSocket.OPEN
@@ -465,6 +465,7 @@ export class Room {
         nextSeat: 0,
         seats: {},
         blocked: {},
+        customWords: null, // host-set list (v2 Phase 4), filtered by the Worker
         lastEmptyAt: now, // an unjoined room dies with the empty-room grace
         game: newGameState(),
       }
@@ -479,6 +480,13 @@ export class Room {
     }
     if (request.method === 'GET' && url.pathname === '/status') {
       return this.probe(await this.load(), userId, request.headers.get('X-IP-Hash'))
+    }
+    // Custom words (v2 Phase 4): recognised by METHOD + PATH like create, never
+    // by a header. The Worker has already filtered each word against the
+    // blocked list and forwarded only the surviving list; the DO re-checks
+    // shape and host status as defense in depth.
+    if (request.method === 'POST' && url.pathname === '/words') {
+      return this.setRoomWords(await this.load(), userId, request)
     }
     if (!isJoin) return new Response('not found', { status: 404 })
 
@@ -912,6 +920,40 @@ export class Room {
     } catch {}
   }
 
+  /**
+   * Host sets the room's custom words (v2 Phase 4c). The Worker has already
+   * filtered each word; here the DO re-checks shape and host status, then
+   * stores and persists the list. Only the host, only in the lobby.
+   */
+  async setRoomWords(room, userId, request) {
+    if (!room) return new Response('no such room', { status: 404 })
+    if (userId !== room.hostUserId) {
+      logEvent('words_ignored', { reason: 'not_host' })
+      return new Response('not host', { status: 403 })
+    }
+    if (room.game.phase !== 'lobby') {
+      logEvent('words_ignored', { reason: 'phase' })
+      return new Response('not in lobby', { status: 409 })
+    }
+    let body = null
+    try {
+      body = await request.json()
+    } catch {}
+    const words = sanitizeCustomWords(body?.words)
+    if (!words) {
+      logEvent('words_ignored', { reason: 'shape' })
+      return new Response('bad words', { status: 400 })
+    }
+    room.customWords = words
+    await this.saveSafe(room)
+    this.broadcast(stateFrame(room.game, Date.now()))
+    logEvent('words_set', { n: words.length })
+    return new Response(JSON.stringify({ ok: true, count: words.length }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }
+
   async handleStart(room, att, ws) {
     const game = room.game
     if (att.userId !== room.hostUserId) {
@@ -930,7 +972,7 @@ export class Room {
 
     // Clear the previous game's last round first: gameSeq/round change below.
     await this.clearRoundStrokes(room)
-    startGame(game, players, Date.now(), gameTimings(this.env), pickWords(WORD_OPTIONS))
+    startGame(game, players, Date.now(), gameTimings(this.env), pickOptions(room.customWords, WORD_OPTIONS))
     await this.saveSafe(room)
     await this.rearm()
     this.broadcast(stateFrame(game, Date.now()))
@@ -1076,7 +1118,7 @@ export class Room {
     if (from === 'scores' && game.round < game.rounds) await this.clearRoundStrokes(room)
     if (from === 'game_over') await this.clearRoundStrokes(room)
 
-    const res = advance(game, now, times, pickWords(WORD_OPTIONS))
+    const res = advance(game, now, times, pickOptions(room.customWords, WORD_OPTIONS))
     await this.afterGameStep(room, res, times)
   }
 

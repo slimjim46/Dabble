@@ -146,6 +146,14 @@ export const CLOSE_MAX_LENGTH_FOR_DISTANCE_1 = 7
 export const CLOSE_DISTANCE_NEAR = 1
 export const CLOSE_DISTANCE_FAR = 2
 
+// ---- Words (v2 Phase 4) -----------------------------------------------------
+// Custom words are host-set in the lobby, go through public.is_word_allowed
+// (the blocked list) in the Worker, and replace the curated list for that room.
+export const WORD_FILTER_TIMEOUT_MS = 2000 // filter RPC timeout, then fail closed
+export const MIN_WORD_LENGTH = 3 // hints and the close-distance rule need >= 3
+export const MAX_CUSTOM_WORDS = 20 // per room, set at once, lobby only
+export const MIN_CUSTOM_WORDS = WORD_OPTIONS // fewer than a full pick: curated instead
+
 // ---- Scoring (v2 Phase 3 step 4b) ------------------------------------------
 // Server-authoritative points. Only the guesser's time bonus is mirrored to
 // the client (to label a gain); the drawer bonus and perfect bonus are shown
