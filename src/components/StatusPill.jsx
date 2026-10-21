@@ -1,4 +1,5 @@
 import { roomsEntryHref } from '../lib/roomsEntry.js'
+import { dailyEntryHref } from '../daily/dailyEntry.js'
 
 const LABELS = {
   connecting: 'Connecting…',
@@ -9,6 +10,7 @@ const LABELS = {
 export default function StatusPill({ status, online, saving, countries, ownerName, ownerUrl, privacyUrl }) {
   const connected = status === 'connected'
   const roomsHref = roomsEntryHref(import.meta.env)
+  const dailyHref = dailyEntryHref(import.meta.env)
   const hasStats = typeof countries === 'number'
   const label = connected
     ? hasStats
@@ -48,6 +50,11 @@ export default function StatusPill({ status, online, saving, countries, ownerNam
         {roomsHref ? (
           <span className="status-footer-item">
             <a href={roomsHref} className="status-footer-link" title="Draw together in a private room">Play with friends</a>
+          </span>
+        ) : null}
+        {dailyHref ? (
+          <span className="status-footer-item">
+            <a href={dailyHref} className="status-footer-link" title="Today's daily drawing challenge">Daily challenge</a>
           </span>
         ) : null}
       </div>
