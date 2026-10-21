@@ -8,7 +8,7 @@ import { rowToStroke } from '../lib/strokeCodec.js'
 // (a password-signed-in account, never anonymous) lives under a different
 // storage key and never touches the drawing session's storage.
 const ADMIN_STORAGE_KEY = 'doodlescrap-admin'
-const PAGE = 50
+const PAGE = 20
 
 function makeClient() {
   const url = import.meta.env.VITE_SUPABASE_URL
@@ -54,6 +54,55 @@ function timeOf(value) {
   }
 }
 
+// ---- daily entry preview ----------------------------------------------------
+// Entries store strokes as {color, width, points:[x,y,...]}. Convert to the
+// stroke shape drawStroke expects, then render on a small canvas. Lazily
+// mounted via IntersectionObserver so a long list does not render every
+// preview at once.
+function DailyEntryPreview({ strokes, size = 200 }) {
+  const ref = useRef(null)
+  const [visible, setVisible] = useState(false)
+  useEffect(() => {
+    const canvas = ref.current
+    if (!canvas) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true)
+          observer.disconnect()
+        }
+      },
+      { threshold: 0.1 },
+    )
+    observer.observe(canvas)
+    return () => observer.disconnect()
+  }, [])
+  useEffect(() => {
+    if (!visible) return
+    const canvas = ref.current
+    if (!canvas) return
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.round(size * dpr)
+    canvas.height = Math.round(size * dpr)
+    const ctx = canvas.getContext('2d')
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, size, size)
+    ctx.save()
+    const scale = size / PAPER_SIZE
+    ctx.scale(scale, scale)
+    for (const s of strokes ?? []) {
+      const points = []
+      for (let i = 0; i < s.points.length; i += 2) {
+        points.push({ x: s.points[i], y: s.points[i + 1] })
+      }
+      drawStroke(ctx, { color: s.color, width: s.width, points })
+    }
+    ctx.restore()
+  }, [visible, strokes, size])
+  return <canvas ref={ref} style={{ width: size, height: size, borderRadius: 8 }} />
+}
+
 export default function AdminApp() {
   const client = useMemo(() => makeClient(), [])
   const [session, setSession] = useState(undefined) // undefined = loading
@@ -66,6 +115,11 @@ export default function AdminApp() {
   const [email, setEmail] = useState('')
   const [sent, setSent] = useState(false)
   const channelRef = useRef(null)
+
+  // Daily entries state
+  const [dailyEntries, setDailyEntries] = useState([])
+  const [dailyCursor, setDailyCursor] = useState({ submittedAt: null, id: null })
+  const [dailyHasMore, setDailyHasMore] = useState(true)
 
   // /admin must not appear in search results (6.5).
   useEffect(() => {
@@ -92,6 +146,23 @@ export default function AdminApp() {
       if (!client || !activeSession) return
       setBusy(true)
       setError('')
+      if (which === 'daily') {
+        const { data, error: rpcError } = await client.rpc('admin_list_daily_entries', {
+          p_status: 'pending', p_limit: PAGE,
+        })
+        if (rpcError) {
+          if (rpcError.code === '42501') setAccess('denied')
+          else setError(rpcError.message || 'Failed to load')
+          setDailyEntries([])
+        } else {
+          setAccess('allowed')
+          setDailyEntries(Array.isArray(data) ? data : [])
+          setDailyHasMore((data?.length ?? 0) >= PAGE)
+          setDailyCursor(data?.length ? { submittedAt: data[data.length - 1].submitted_at, id: data[data.length - 1].id } : { submittedAt: null, id: null })
+        }
+        setBusy(false)
+        return
+      }
       const fn = which === 'flagged' ? 'admin_list_flagged' : 'admin_list_recent'
       const args = which === 'flagged'
         ? { p_limit: PAGE, p_offset: 0 }
@@ -116,6 +187,7 @@ export default function AdminApp() {
     if (!session) {
       setAccess('unknown')
       setRows([])
+      setDailyEntries([])
       return
     }
     load(tab, session)
@@ -138,6 +210,22 @@ export default function AdminApp() {
   }, [client])
 
   const refresh = useCallback(() => load(tab, session), [load, tab, session])
+
+  const loadMoreDaily = useCallback(async () => {
+    if (!client || !session || busy || !dailyHasMore) return
+    setBusy(true)
+    const { data, error: rpcError } = await client.rpc('admin_list_daily_entries', {
+      p_status: 'pending', p_limit: PAGE,
+      p_after_submitted_at: dailyCursor.submittedAt,
+      p_after_id: dailyCursor.id,
+    })
+    if (!rpcError && Array.isArray(data) && data.length > 0) {
+      setDailyEntries((prev) => [...prev, ...data])
+      setDailyHasMore(data.length >= PAGE)
+      setDailyCursor({ submittedAt: data[data.length - 1].submitted_at, id: data[data.length - 1].id })
+    }
+    setBusy(false)
+  }, [client, session, busy, dailyHasMore, dailyCursor])
 
   const hideStroke = useCallback(
     async (row) => {
@@ -201,6 +289,22 @@ export default function AdminApp() {
       setBusy(false)
     },
     [client, refresh],
+  )
+
+  const reviewDailyEntry = useCallback(
+    async (entry, approve) => {
+      setBusy(true)
+      setError('')
+      const { error: rpcError } = await client.rpc('admin_review_daily_entry', {
+        p_entry_id: entry.id,
+        p_approve: approve,
+      })
+      if (rpcError) setError(rpcError.message)
+      else setNotice(approve ? 'Entry approved' : 'Entry rejected')
+      await load('daily', session)
+      setBusy(false)
+    },
+    [client, session, load],
   )
 
   const sendMagicLink = useCallback(
@@ -301,6 +405,13 @@ export default function AdminApp() {
           >
             Recent
           </button>
+          <button
+            type="button"
+            className={tab === 'daily' ? 'admin-tab-active' : ''}
+            onClick={() => setTab('daily')}
+          >
+            Daily entries
+          </button>
         </nav>
         <div className="admin-actions">
           <button type="button" onClick={refresh} disabled={busy}>Refresh</button>
@@ -311,58 +422,100 @@ export default function AdminApp() {
       {error && <p className="admin-error">{error}</p>}
       {notice && <p className="admin-notice">{notice}</p>}
 
-      {busy && rows.length === 0 && <p className="admin-muted">Loading…</p>}
-      {!busy && rows.length === 0 && <p className="admin-muted">Nothing here.</p>}
+      {tab === 'daily' ? (
+        <>
+          {busy && dailyEntries.length === 0 && <p className="admin-muted">Loading…</p>}
+          {!busy && dailyEntries.length === 0 && <p className="admin-muted">No pending daily entries.</p>}
+          <div className="admin-list">
+            {dailyEntries.map((entry) => (
+              <article key={entry.id} className="admin-card admin-row">
+                <DailyEntryPreview strokes={entry.strokes} />
+                <div className="admin-meta">
+                  <strong>{entry.prompt}</strong>
+                  <span className="admin-muted">{timeOf(entry.submitted_at)}</span>
+                  <span className="admin-muted">{entry.status}</span>
+                  <div className="admin-actions">
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => reviewDailyEntry(entry, true)}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => reviewDailyEntry(entry, false)}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+          {dailyHasMore && dailyEntries.length > 0 && (
+            <button type="button" onClick={loadMoreDaily} disabled={busy}>
+              {busy ? 'Loading…' : 'Load more'}
+            </button>
+          )}
+        </>
+      ) : (
+        <>
+          {busy && rows.length === 0 && <p className="admin-muted">Loading…</p>}
+          {!busy && rows.length === 0 && <p className="admin-muted">Nothing here.</p>}
 
-      <div className="admin-list">
-        {rows.map((row) => (
-          <article key={row.id} className="admin-card admin-row">
-            <StrokePreview row={row} />
-            <div className="admin-meta">
-              <strong title={row.user_id}>{row.user_name || 'unnamed'}</strong>
-              <span className="admin-muted">{timeOf(row.created_at)}</span>
-              {row.report_count > 0 && (
-                <span className="admin-reports">{row.report_count} report(s)</span>
-              )}
-              {row.hidden && (
-                <span className="admin-hidden">hidden{row.hidden_reason ? ` · ${row.hidden_reason}` : ''}</span>
-              )}
-              <div className="admin-actions">
-                {row.hidden ? (
-                  <button type="button" onClick={() => restoreStroke(row)} disabled={busy}>
-                    Restore
-                  </button>
-                ) : (
-                  <button type="button" onClick={() => hideStroke(row)} disabled={busy}>
-                    Hide
-                  </button>
-                )}
-                <button
-                  type="button"
-                  disabled={busy || !row.user_id}
-                  onClick={() => banPlayer(row, true)}
-                >
-                  Ban + hide strokes
-                </button>
-                <button
-                  type="button"
-                  disabled={busy || !row.user_id}
-                  onClick={() => banPlayer(row, false)}
-                >
-                  Ban only
-                </button>
-                <button
-                  type="button"
-                  disabled={busy || !row.user_id}
-                  onClick={() => unbanPlayer(row)}
-                >
-                  Unban
-                </button>
-              </div>
-            </div>
-          </article>
-        ))}
-      </div>
+          <div className="admin-list">
+            {rows.map((row) => (
+              <article key={row.id} className="admin-card admin-row">
+                <StrokePreview row={row} />
+                <div className="admin-meta">
+                  <strong title={row.user_id}>{row.user_name || 'unnamed'}</strong>
+                  <span className="admin-muted">{timeOf(row.created_at)}</span>
+                  {row.report_count > 0 && (
+                    <span className="admin-reports">{row.report_count} report(s)</span>
+                  )}
+                  {row.hidden && (
+                    <span className="admin-hidden">hidden{row.hidden_reason ? ` · ${row.hidden_reason}` : ''}</span>
+                  )}
+                  <div className="admin-actions">
+                    {row.hidden ? (
+                      <button type="button" onClick={() => restoreStroke(row)} disabled={busy}>
+                        Restore
+                      </button>
+                    ) : (
+                      <button type="button" onClick={() => hideStroke(row)} disabled={busy}>
+                        Hide
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={busy || !row.user_id}
+                      onClick={() => banPlayer(row, true)}
+                    >
+                      Ban + hide strokes
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || !row.user_id}
+                      onClick={() => banPlayer(row, false)}
+                    >
+                      Ban only
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy || !row.user_id}
+                      onClick={() => unbanPlayer(row)}
+                    >
+                      Unban
+                    </button>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   )
 }
