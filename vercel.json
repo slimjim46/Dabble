@@ -1,8 +1,28 @@
 {
   "rewrites": [
-    { "source": "/admin", "destination": "/index.html" },
-    { "source": "/rooms", "destination": "/index.html" },
-    { "source": "/rooms/:path*", "destination": "/index.html" },
-    { "source": "/r/:path*", "destination": "/index.html" }
+    {
+      "source": "/admin",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/rooms",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/rooms/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/r/:path*",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/daily",
+      "destination": "/index.html"
+    },
+    {
+      "source": "/daily/:path*",
+      "destination": "/index.html"
+    }
   ]
 }

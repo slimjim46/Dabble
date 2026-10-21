@@ -677,6 +677,8 @@ function sourceCode(rel) {
   const sources = vercel.rewrites.map((r) => r.source)
   check('vercel.json: /rooms and /r/:path* rewrite to index.html',
     sources.includes('/rooms') && sources.includes('/r/:path*'), JSON.stringify(sources))
+  check('vercel.json: /daily and /daily/:path* rewrite to index.html',
+    sources.includes('/daily') && sources.includes('/daily/:path*'), JSON.stringify(sources))
   check('vercel.json: the plaza root is untouched', !sources.includes('/'))
 
   const env = readSource('.env.example')
