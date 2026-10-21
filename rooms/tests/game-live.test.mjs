@@ -12,6 +12,14 @@ const start = JSON.stringify({ v: 1, t: 'start' })
 const kick = (userId) => JSON.stringify({ v: 1, t: 'kick', userId })
 const revealed = (hint) => [...(hint || '')].filter((c) => c !== '_' && c !== ' ').length
 
+// The fast worker's drawing phase (GAME_ROUND_MS in wrangler.toml, env.fast).
+// The suites assume these short timings.
+const DRAWING_PHASE_MS = 12000
+// A hint is due at 50%/75% of the phase, but the platform can deliver an
+// alarm seconds late, so a hint is waited for across the WHOLE phase (plus a
+// delivery margin), never against a fixed mark.
+const HINT_WAIT_MS = DRAWING_PHASE_MS + 2000
+
 // A complete stroke for one wire key: start (first point), one points batch,
 // end. Enough to exercise the drawer gate end to end.
 function strokeFrames(k, id) {
@@ -125,12 +133,22 @@ const closeAll = async (conns) => {
     check(`A: round ${round} drawer got your_word`, your?.word === word, JSON.stringify(your))
 
     if (round === 1) {
-      const h1 = await drawerConn.waitFor((m) => m.t === 'state' && m.phase === 'drawing' && m.hint && revealed(m.hint) > 0, 9000)
+      // The first hint is due at 50% of the drawing phase, but the platform
+      // can deliver an alarm seconds late. Wait for the hint across the whole
+      // phase instead of a fixed mark, and assert where it landed: the round
+      // had started (same round, drawing phase) and had not ended yet
+      // (remainingMs > 0). A hint that never arrives inside the phase still
+      // fails the check.
+      const h1 = await drawerConn.waitFor((m) => m.t === 'state' && m.phase === 'drawing' && m.hint && revealed(m.hint) > 0, HINT_WAIT_MS)
       check('A: first hint is broadcast mid-round',
         !!h1 && h1.round === round && revealed(h1.hint) < word.length, JSON.stringify(h1))
-      const h2 = await drawerConn.waitFor((m) => m.t === 'state' && m.phase === 'drawing' && m.hint && revealed(m.hint) > revealed(h1?.hint), 7000)
+      check('A: the first hint lands after the round started and before it ended',
+        !!h1 && h1.round === round && h1.phase === 'drawing' && h1.remainingMs > 0, JSON.stringify(h1))
+      const h2 = await drawerConn.waitFor((m) => m.t === 'state' && m.phase === 'drawing' && m.hint && revealed(m.hint) > revealed(h1?.hint), HINT_WAIT_MS)
       check('A: second hint reveals more letters, never all',
         !!h2 && revealed(h2.hint) < word.length, JSON.stringify(h2))
+      check('A: the second hint lands inside the round as well',
+        !!h2 && h2.round === round && h2.phase === 'drawing' && h2.remainingMs > 0, JSON.stringify(h2))
       check('A: hints never contain the word', ![h1, h2].some((m) => m && JSON.stringify(m).includes(word)))
 
       // Draw during the round so the next snapshot has something to clear.
