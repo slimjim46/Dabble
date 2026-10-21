@@ -59,7 +59,11 @@ export function cachedLookup(hostname, options, callback) {
 // own `lookup` option below.
 setGlobalDispatcher(new Agent({ connect: { lookup: cachedLookup } }))
 
-export const TARGET = process.env.ROOMS_TARGET_URL || 'https://dabble-rooms-dev.rowan-dev-workers.workers.dev'
+// The live suites assume the short GAME_* timings, so the default target is
+// the fast dev worker. dabble-rooms-dev runs the production timings (pick
+// 10 s, drawing 75 s, drawer grace 10 s) for phone testing: the game suites
+// time out against it instead of failing for a real reason.
+export const TARGET = process.env.ROOMS_TARGET_URL || 'https://dabble-rooms-dev-fast.rowan-dev-workers.workers.dev'
 const ALLOWED = process.env.ROOMS_ALLOWED_URL
 if (!ALLOWED || TARGET !== ALLOWED) {
   console.error(`refusing to run: set ROOMS_ALLOWED_URL to exactly ${TARGET}`)

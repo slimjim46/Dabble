@@ -2,8 +2,12 @@
 # signs in anonymous users and creates real rooms, so it must never run on
 # every push or on a schedule.
 #
+# The suite needs the fast worker (short GAME_* timings): against
+# dabble-rooms-dev the game suites time out instead of failing for a real
+# reason.
+#
 # Owner setup (once), under Settings -> Secrets and variables -> Actions:
-#   Variables: ROOMS_ALLOWED_URL = https://dabble-rooms-dev.rowan-dev-workers.workers.dev
+#   Variables: ROOMS_ALLOWED_URL = https://dabble-rooms-dev-fast.rowan-dev-workers.workers.dev
 #              SUPABASE_URL      = <dev project URL>
 #   Secrets:   SUPABASE_ANON_KEY = <dev anon key>   (public key; never service_role)
 #
@@ -32,9 +36,10 @@ jobs:
 
       - run: npm ci
 
-      - name: Run rooms tests against dev
+      - name: Run rooms tests against the fast dev worker
         run: npm test
         env:
           ROOMS_ALLOWED_URL: ${{ vars.ROOMS_ALLOWED_URL }}
+          ROOMS_TARGET_URL: ${{ vars.ROOMS_ALLOWED_URL }}
           SUPABASE_URL: ${{ vars.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}

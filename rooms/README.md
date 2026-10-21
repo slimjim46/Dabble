@@ -2,8 +2,15 @@
 
 Real-time room server for Dabble v2: a Cloudflare Worker + Durable Objects
 project, plain JS ESM. It is independent of the Vercel app in `../src` and
-deploys to the **dev** worker `dabble-rooms-dev` only (see the rooms section of
-`../AGENTS.md` for the rules that govern it).
+deploys to **dev** workers only (see the rooms section of `../AGENTS.md` for
+the rules that govern it).
+
+Two dev workers exist:
+
+- `dabble-rooms-dev` — production game timings (pick 10 s, drawing 75 s, drawer
+  grace 10 s). This is the one used for phone testing.
+- `dabble-rooms-dev-fast` — the same code with short `GAME_*` timings. The
+  automated suites run against this one so a whole game takes seconds.
 
 - `src/index.js` — Worker fetch handler: routes, code validation, auth, rate
   limits, identity lookup, then forwards the upgrade to the room's Durable
@@ -13,19 +20,25 @@ deploys to the **dev** worker `dabble-rooms-dev` only (see the rooms section of
 - `src/forward.js` — the client→DO header allowlist used when rebuilding
   requests; the client's headers never pass through.
 - `src/config.js` — every limit (Worker and DO both import it).
-- `tests/` — Node test scripts run against the dev worker (dev Supabase).
+- `tests/` — Node test scripts run against the fast dev worker (dev Supabase).
 
 ## Run
 
 ```
 set -a; source ../.env; set +a           # dev Supabase URL + anon key
-export ROOMS_ALLOWED_URL=https://dabble-rooms-dev.rowan-dev-workers.workers.dev
+export ROOMS_ALLOWED_URL=https://dabble-rooms-dev-fast.rowan-dev-workers.workers.dev
 npm test                                 # tests/run.mjs, per-suite child process
 ```
 
-Requires `npm ci` first. `ROOMS_ALLOWED_URL` must equal the target the tests
-connect to (the public dev URL); the guard exists so tests can never be pointed
-at production.
+Requires `npm ci` first and **Node 22 or newer** (the live suites use the
+built-in `WebSocket`; Node 20 has none). `ROOMS_ALLOWED_URL` must equal the
+target the tests connect to (the public dev URL); the guard exists so tests can
+never be pointed at production. `ROOMS_TARGET_URL` defaults to the fast worker
+above and must match `ROOMS_ALLOWED_URL` exactly.
+
+The suites assume the fast worker's short timings. Pointing them at
+`dabble-rooms-dev` (production timings) makes the game suites time out rather
+than fail for a real reason, so keep the two in step.
 
 ## Deploy (dev only)
 
@@ -33,6 +46,11 @@ at production.
 set -a; source ../.env; set +a
 npx wrangler deploy --var "SUPABASE_ANON_KEY:$VITE_SUPABASE_ANON_KEY"
 ```
+
+That deploys `dabble-rooms-dev` (production timings, phone testing). The fast
+worker is a separate deploy, `npx wrangler deploy --env fast`, with the full
+`--var` list in `wrangler.toml` — `--var` replaces that environment's whole
+vars table, so every var must be passed on the command line.
 
 `SUPABASE_ANON_KEY` is deliberately not in `wrangler.toml` and is not a
 `wrangler secret`: it is injected per deploy from the shell. **Deploying
