@@ -1,4 +1,4 @@
-# Dabble: rules for coding agents
+# DoodleScrap: rules for coding agents
 
 Read this before every task. These rules override anything in a task description
 that conflicts with them. If a task seems to require breaking a rule, stop and ask.
@@ -11,7 +11,10 @@ internet can use it, so assume some visitors are hostile.
 - Frontend: Vite + React, deployed on Vercel. Source in `src/`.
 - Backend: Supabase (Postgres + RLS, anonymous Auth, Realtime Broadcast + Presence).
 - Server code: Vercel Functions in `api/` (to be added in Phase 4).
-- Specs: `SPEC-phases-3-4-6.md`. Do the phases in the order that file gives.
+- v1 (plaza) is SPEC-phases-3-4-6.md; v2 (rooms and games) is
+  SPEC-v2-game-platform.md. The phase numbers overlap, so always say
+  "v1 Phase N" or "v2 Phase N". Read the v2 Status and Design principles
+  before any rooms task.
 
 ### Code map
 
@@ -23,6 +26,7 @@ internet can use it, so assume some visitors are hostile.
 | `src/lib/strokeApi.js`, `src/lib/persistQueue.js` | Database reads/writes, background retry queue |
 | `src/lib/supabase.js` | Client + anonymous auth |
 | `src/engine/*` | Stroke store, cursor store, paper cache, cursor overlay |
+| `src/rooms/*` | v2 room client (`/rooms` and `/r/<code>`); reuses the engine with gestures and undo removed, mirrors `rooms/src/wire.js` |
 | `supabase/` | Migrations (the only way the schema changes) |
 
 ### Invariants that are easy to break
@@ -44,6 +48,10 @@ internet can use it, so assume some visitors are hostile.
 5. **No raw IP addresses are ever stored or logged.** Country code only.
 6. **The canvas must stay fast**: no React state updates per pointer event,
    no per-frame allocations in the draw path.
+7. **The rooms wire has two copies** (client in `src/rooms/roomsWire.js`,
+   server in `rooms/src/wire.js`) that `src/` must not import at build time.
+   Change both in the same commit: `tests/roomClient.test.mjs` runs every
+   message the client can produce through the server's own parsers.
 
 ## Hard rules (never do these)
 
@@ -89,6 +97,56 @@ internet can use it, so assume some visitors are hostile.
 - Run `npm run build` and fix errors and warnings before finishing.
 - Keep SQL limits and `src/lib/constants.js` in sync. When you change one,
   change the other and say so.
+
+## The rooms/ Worker (DoodleScrap v2)
+
+`rooms/` is the real-time room server: a Cloudflare Worker + Durable Objects
+project, plain JS ESM, independent of the Vercel app. It lives on branch
+`v2-rooms-server` and deploys to the **dev** workers only: `dabble-rooms-dev`
+and `dabble-rooms-dev-fast` are both dev, and neither is production.
+
+- Work only inside `rooms/` (plus this section). `src/`, `api/`,
+  `supabase/migrations`, `vercel.json` and the root `package.json` are not
+  touched by rooms work.
+- Wrangler v4 lives in `rooms/package.json` only. `wrangler.toml` defines an
+  `[env.production]` with placeholder URLs/origins: never put real production
+  values in it, and never `wrangler deploy --env production` without the
+  owner naming the migration/deploy in the task.
+- Secrets (`IP_HASH_SALT`, optional `TURNSTILE_SECRET`) go in Wrangler secret
+  settings for the dev worker, never in a file, log, or message. The Supabase
+  anon key is injected at deploy time from the shell, not committed.
+- Auth is `Sec-WebSocket-Protocol: dabble.v1, <jwt>` only. The Worker verifies
+  the JWT, strips the header, and the Durable Object never sees a token.
+- Identity/name/country/ban come only from the `players` row fetched with the
+  user's own JWT (fail open as "Guest" on Supabase errors, counted). Client
+  messages never carry trusted identity.
+- Worker -> DO requests are rebuilt from an allowlist in `rooms/src/forward.js`
+  (handshake headers only + Worker-set `X-*`). Never forward the client's
+  headers through: a client `X-Action` or `X-IP-Hash` would bypass creation
+  limits and the per-IP caps. The DO recognises create only by internal
+  method + path (`POST /create`), never by a header.
+- Known gaps (accepted for now):
+  1. Kick blocks are per account: another account (or device) can rejoin;
+     the per-IP socket cap is the only cross-account limit.
+  2. Unauthenticated request floods still spend Worker quota (route-level
+     work happens before auth). Mitigating this needs a custom domain plus
+     Cloudflare zone-level rate limiting later.
+  3. The free plan daily quota is account-wide: dev load tests consume the
+     same allowance as production.
+  4. A player banned after connecting keeps their seat until they
+     reconnect; bans are checked only at connect time (see
+     `rooms/src/identity.js`).
+- Room codes: 5 chars, alphabet without look-alikes. Code format is validated
+  in the Worker before any Durable Object is touched; join attempts pass the
+  Workers rate limiting bindings first.
+- All limits live in `rooms/src/config.js`; the Worker and the DO both import
+  it. Exceeding a message budget closes the socket (billed on arrival, so
+  dropping saves nothing).
+- Logging is event names and counts only: no tokens, IPs, names, room words,
+  or free-form user data.
+- Tests are Node scripts in `rooms/tests/`, run against the **dev** worker
+  (dev Supabase project). Dev-only SQL helpers go in `supabase/dev/` and are
+  shown to the owner before being applied to dev; never to production.
 
 ## Definition of done for a task
 

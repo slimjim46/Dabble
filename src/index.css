@@ -681,3 +681,12 @@ body,
 .status-footer-item a:hover {
   text-decoration: underline;
 }
+
+/* A comfortable tap target for the one interactive footer link, without
+   changing the row's flow height (the negative margin cancels the padding),
+   so the footer does not shift and never overlaps at 360px. */
+.status-footer-link {
+  display: inline-block;
+  padding: 13px 6px;
+  margin: -13px -6px;
+}

@@ -643,7 +643,7 @@ export default function DrawingApp() {
     })
     try {
       if (navigator.share) {
-        await navigator.share({ title: 'Dabble', url })
+        await navigator.share({ title: 'DoodleScrap', url })
         return
       }
       await navigator.clipboard.writeText(url)

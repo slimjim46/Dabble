@@ -1,0 +1,229 @@
+# DoodleScrap v2 room server. Real server; not the live app's frontend.
+# Dev deploys as dabble-rooms-dev. The production environment below is a
+# definition only: never deploy it without the owner's explicit say-so, and
+# never put real production origins/secrets in this file (placeholders only).
+# SUPABASE_ANON_KEY is intentionally empty here: it is injected at deploy
+# time from the shell environment (--var), never committed.
+
+name = "dabble-rooms-dev"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+[vars]
+ENVIRONMENT = "dev"
+# Dev Supabase project (Dabble-Dev). Not a secret; the anon key is public.
+SUPABASE_URL = "https://mlynwcajwxmceglgtcat.supabase.co"
+# Comma-separated origins allowed to open sockets / call POST /rooms (and the
+# /rooms/<code>/status probe). Exact match, no wildcards. Dev only: never add
+# a production origin here, it belongs on the production Worker later.
+ALLOWED_ORIGINS = "http://localhost:5173, https://dabble-git-v2-wire-prep-dabble1.vercel.app, https://dabble-git-rooms-client-dabble1.vercel.app"
+# Dev runs the load test from one machine, so the per-IP-per-room socket cap
+# is raised here. The production env does NOT define this override.
+IP_ROOM_SOCKET_LIMIT = "8"
+# Same reason: the test suites + load test create many rooms from one IP.
+# Production keeps the config default (30/hour) by not defining it.
+MAX_ROOMS_PER_IP_PER_HOUR = "100"
+# Short empty-room grace so tests can watch a room die; production keeps the
+# config default (5 min) by not defining it.
+ROOM_GRACE_MS = "15000"
+# Short seat hold so tests can watch promotion/release; production keeps the
+# config default (2 min) by not defining it.
+SEAT_HOLD_MS = "5000"
+# The default vars intentionally define NO GAME_* or DRAWER_GRACE_MS: this
+# worker (dabble-rooms-dev) is the one used for phone testing and must run the
+# production timings (pick 10 s, drawing 75 s, reveal 8 s, scores 8 s, game
+# over 30 s, drawer grace 10 s). The `env.fast` environment below carries the
+# short overrides for the automated suites instead.
+# Test double for the daily-quota failure path. Honored only when
+# ENVIRONMENT === "dev"; the production env must never define it.
+# SIMULATE_QUOTA = "1"
+
+# Join probe shield (60 s windows): nobody should be able to burn the daily
+# DO quota by hammering random codes. Docs: period must be 10 or 60 seconds.
+[[ratelimits]]
+name = "JOIN_USER"
+namespace_id = "2101"
+  [ratelimits.simple]
+  limit = 60
+  period = 60
+
+[[ratelimits]]
+name = "JOIN_IP"
+namespace_id = "2102"
+  [ratelimits.simple]
+  limit = 90
+  period = 60
+
+[[durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[durable_objects.bindings]]
+name = "LIMITER"
+class_name = "Limiter"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room", "Limiter"]
+
+# ------------------------------------------------------------------------
+# Dev environment. Same worker as the top level (dabble-rooms-dev); this
+# section exists so `wrangler deploy --env dev` works. A named environment
+# inherits NOTHING from the top level, so vars/bindings/migrations/ratelimits
+# are repeated here deliberately. WARNING: keep in sync with the top-level
+# dev config above. No GAME_* / DRAWER_GRACE_MS: like the top level, this
+# worker runs production timings (phone testing).
+[env.dev]
+name = "dabble-rooms-dev"
+
+[env.dev.vars]
+ENVIRONMENT = "dev"
+SUPABASE_URL = "https://mlyncwajwxmceglgtcat.supabase.co"
+ALLOWED_ORIGINS = "http://localhost:5173, https://dabble-git-v2-wire-prep-dabble1.vercel.app, https://dabble-git-rooms-client-dabble1.vercel.app"
+IP_ROOM_SOCKET_LIMIT = "8"
+MAX_ROOMS_PER_IP_PER_HOUR = "100"
+ROOM_GRACE_MS = "15000"
+SEAT_HOLD_MS = "5000"
+
+[[env.dev.ratelimits]]
+name = "JOIN_USER"
+namespace_id = "2401"
+  [env.dev.ratelimits.simple]
+  limit = 60
+  period = 60
+
+[[env.dev.ratelimits]]
+name = "JOIN_IP"
+namespace_id = "2402"
+  [env.dev.ratelimits.simple]
+  limit = 90
+  period = 60
+
+[[env.dev.durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[env.dev.durable_objects.bindings]]
+name = "LIMITER"
+class_name = "Limiter"
+
+[[env.dev.migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room", "Limiter"]
+
+# ------------------------------------------------------------------------
+# Fast test worker (dev only). It exists so the automated suites can walk a
+# whole game in seconds while dabble-rooms-dev above runs production timings
+# for phone testing.
+#
+# Deploy (wrangler 4.x): `--var` REPLACES this environment's whole vars table
+# rather than merging it, so EVERY var must be passed on the command line --
+# including the public anon key (never committed). SUPABASE_URL and
+# ENVIRONMENT in particular MUST be present or every JWT fails 401:
+#
+#   npx wrangler deploy --env fast \
+#     --var "SUPABASE_ANON_KEY:$VITE_SUPABASE_ANON_KEY" \
+#     --var "SUPABASE_URL:$VITE_SUPABASE_URL" \
+#     --var "ENVIRONMENT:dev" \
+#     --var "ALLOWED_ORIGINS:http://localhost:5173, https://dabble-git-v2-wire-prep-dabble1.vercel.app, https://dabble-git-rooms-client-dabble1.vercel.app" \
+#     --var "IP_ROOM_SOCKET_LIMIT:8" \
+#     --var "MAX_ROOMS_PER_IP_PER_HOUR:100" \
+#     --var "ROOM_GRACE_MS:15000" \
+#     --var "SEAT_HOLD_MS:5000" \
+#     --var "GAME_PICK_MS:6000" \
+#     --var "GAME_ROUND_MS:12000" \
+#     --var "GAME_REVEAL_MS:3000" \
+#     --var "GAME_SCORES_MS:3000" \
+#     --var "GAME_OVER_MS:5000" \
+#     --var "DRAWER_GRACE_MS:3000" \
+#     --var "EARLY_FINISH_HOLD_MS:2000"
+#
+# One-time secret (dev-only, never a file/log/message). Without it the per-IP
+# socket cap is unenforceable (hash.js returns null and ipCapAllows allows all):
+#
+#   openssl rand -hex 24 | npx wrangler secret put IP_HASH_SALT --env fast
+#
+# A named environment inherits NOTHING from the top level, so bindings,
+# migrations, ratelimits and vars are repeated here deliberately.
+# ENVIRONMENT must be exactly "dev": the GAME_* overrides and X-Test-IP are
+# honored only when ENVIRONMENT === "dev" exactly (rooms/src/config.js).
+# ALLOWED_ORIGINS carries dev origins only: never a production origin.
+# It shares the same account daily request quota as every other dev worker.
+[env.fast]
+name = "dabble-rooms-dev-fast"
+
+# Vars as a table section (not an inline `vars = { ... }`), matching the shape
+# that documents these names; the deploy command above repeats them all.
+[env.fast.vars]
+ENVIRONMENT = "dev"
+SUPABASE_URL = "https://mlyncwajwxmceglgtcat.supabase.co"
+ALLOWED_ORIGINS = "http://localhost:5173, https://dabble-git-v2-wire-prep-dabble1.vercel.app, https://dabble-git-rooms-client-dabble1.vercel.app"
+IP_ROOM_SOCKET_LIMIT = "8"
+MAX_ROOMS_PER_IP_PER_HOUR = "100"
+ROOM_GRACE_MS = "15000"
+SEAT_HOLD_MS = "5000"
+GAME_PICK_MS = "6000"
+GAME_ROUND_MS = "12000"
+GAME_REVEAL_MS = "3000"
+GAME_SCORES_MS = "3000"
+GAME_OVER_MS = "5000"
+DRAWER_GRACE_MS = "3000"
+EARLY_FINISH_HOLD_MS = "2000"
+
+[[env.fast.ratelimits]]
+name = "JOIN_USER"
+namespace_id = "2301"
+  [env.fast.ratelimits.simple]
+  limit = 60
+  period = 60
+
+[[env.fast.ratelimits]]
+name = "JOIN_IP"
+namespace_id = "2302"
+  [env.fast.ratelimits.simple]
+  limit = 90
+  period = 60
+
+[[env.fast.durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[env.fast.durable_objects.bindings]]
+name = "LIMITER"
+class_name = "Limiter"
+
+[[env.fast.migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room", "Limiter"]
+
+# Production: defined, never deployed from this phase. Placeholders only.
+# Inherits nothing from the top level: bindings/vars/migrations are repeated.
+[env.production]
+name = "dabble-rooms"
+vars = { ENVIRONMENT = "production", SUPABASE_URL = "https://PRODUCTION_SUPABASE_URL.supabase.co", ALLOWED_ORIGINS = "https://PRODUCTION_APP_ORIGIN.example" }
+
+[[env.production.ratelimits]]
+name = "JOIN_USER"
+namespace_id = "2201"
+  [env.production.ratelimits.simple]
+  limit = 60
+  period = 60
+
+[[env.production.ratelimits]]
+name = "JOIN_IP"
+namespace_id = "2202"
+  [env.production.ratelimits.simple]
+  limit = 90
+  period = 60
+
+[[env.production.durable_objects.bindings]]
+name = "ROOM"
+class_name = "Room"
+
+[[env.production.durable_objects.bindings]]
+name = "LIMITER"
+class_name = "Limiter"
+
+[[env.production.migrations]]
+tag = "v1"
+new_sqlite_classes = ["Room", "Limiter"]

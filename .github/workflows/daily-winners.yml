@@ -1,0 +1,37 @@
+# Renders the daily challenge winners to PNG images and stores them in the
+# 'snapshots' bucket, so the gallery can show a shareable image per winner.
+#
+# Runs once a day, shortly after the voting day closes (00:15 UTC), so the
+# previous day's winner is rendered and published before the next morning.
+#
+# Secrets: SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY (already in GitHub
+# secrets for the snapshot job). Server-side only, never in the repo.
+name: Daily winners
+
+on:
+  schedule:
+    - cron: '15 0 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: daily-winners
+  cancel-in-progress: false
+
+jobs:
+  daily-winners:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Render daily winners
+        run: node scripts/render-daily-winners.mjs
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}

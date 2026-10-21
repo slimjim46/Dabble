@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
+
 // Open Graph scrapers do not run JavaScript, so og:image / twitter:image have
 // to be absolute URLs in the built HTML — a relative one is dropped by every
 // scraper that sees it. They can only be absolute if the owner sets
@@ -32,12 +33,12 @@ function scriptsToBody(html) {
 function openGraphImage() {
   let siteUrl = ''
   return {
-    name: 'dabble:og-image',
+    name: 'doodlescrap:og-image',
     configResolved(config) {
       const raw = String(config.env?.VITE_SITE_URL ?? '').trim().replace(/\/+$/, '')
       siteUrl = /^https?:\/\//i.test(raw) ? raw : ''
       if (raw && !siteUrl) {
-        console.warn('[dabble] VITE_SITE_URL must be an absolute http(s) URL — og:image tags dropped')
+        console.warn('[doodlescrap] VITE_SITE_URL must be an absolute http(s) URL — og:image tags dropped')
       }
     },
     transformIndexHtml(html) {
@@ -53,4 +54,9 @@ function openGraphImage() {
 
 export default defineConfig({
   plugins: [react(), openGraphImage()],
+  server: {
+    host: true,
+    port: 5173,
+    allowedHosts: ['.trycloudflare.com'],
+  },
 })

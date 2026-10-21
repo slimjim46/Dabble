@@ -7,7 +7,7 @@ const SUPABASE_ANON_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY
 
 if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
   console.error(
-    '[dabble] VITE_SUPABASE_URL and/or VITE_SUPABASE_ANON_KEY are not set — ' +
+    '[doodlescrap] VITE_SUPABASE_URL and/or VITE_SUPABASE_ANON_KEY are not set — ' +
       'realtime sync and persistence are disabled. Copy .env.example to .env and fill it in.',
   )
 }
@@ -46,12 +46,12 @@ export function ensureAnonymousAuth() {
           captchaToken ? { options: { captchaToken } } : undefined,
         )
         if (error) {
-          console.error('[dabble] anonymous sign-in failed:', error.message)
+          console.error('[doodlescrap] anonymous sign-in failed:', error.message)
           return null
         }
         return data.user ?? null
       } catch (error) {
-        console.error('[dabble] anonymous sign-in failed:', error)
+        console.error('[doodlescrap] anonymous sign-in failed:', error)
         return null
       }
     })().then((user) => {

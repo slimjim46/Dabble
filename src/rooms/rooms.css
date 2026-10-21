@@ -1,0 +1,708 @@
+/* Rooms only. Imported lazily by RoomsApp, so nothing here is on the plaza's
+   critical path, and everything reuses --ui-* from src/index.css so a room
+   looks like the rest of DoodleScrap. */
+
+/* ---- shell ---- */
+.room-screen {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---- top-right chrome ---- */
+/* One wrapping row owns all top chrome: the left column (name + game header)
+   and the right bar. It is a flex row that wraps, so on a narrow screen the
+   bar drops to a second line instead of overlapping the header. No absolute
+   top offsets, so the overlap the screenshot showed cannot recur. */
+.room-top {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  left: 12px;
+  right: 12px;
+  z-index: 3;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.room-top-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Everything in the top row is interactive again (the container is
+   pointer-events:none so the paper shows through the gaps). */
+.room-top > *,
+.room-top .name-pill,
+.room-top .status-pill,
+.room-top .room-pill-button,
+.room-top .room-copy,
+.room-top .game-header {
+  pointer-events: auto;
+}
+
+/* In a room the name pill is the first chip of the left column, not an
+   absolute top-left element fighting the game header for the same corner. */
+.room-screen .name-pill {
+  position: static;
+  top: auto;
+  left: auto;
+  z-index: auto;
+}
+
+.room-bar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+/* index.css centres .status-pill absolutely for the plaza; in a room it is
+   just the first chip in the bar. */
+.room-bar .status-pill {
+  position: static;
+  transform: none;
+  pointer-events: auto;
+}
+
+.room-code-chip {
+  display: inline-flex;
+  align-items: stretch;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  background: var(--ui-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  overflow: hidden;
+}
+
+.room-code {
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--ui-text);
+  padding: 6px 4px 6px 10px;
+  user-select: all;
+}
+
+.room-copy {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ui-muted);
+  background: transparent;
+  border: none;
+  border-left: 1px solid var(--ui-border);
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.room-copy:hover {
+  color: var(--ui-text);
+}
+
+.room-pill-button {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ui-text);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 6px 10px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.room-pill-button:hover {
+  border-color: var(--ui-text);
+}
+
+/* ---- players panel ---- */
+/* The panel is a dialog: it sits at the overlay layer (z6) so it covers the
+   toast and the reconnect banner instead of sharing their slot, and the
+   RoomScreen suppresses the reconnect banner while it is open. */
+.room-panel {
+  position: absolute;
+  top: calc(max(10px, env(safe-area-inset-top)) + 44px);
+  right: 12px;
+  z-index: 6;
+  width: min(280px, calc(100vw - 24px));
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 14px;
+  padding: 10px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.22);
+}
+
+.room-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--ui-text);
+  margin-bottom: 8px;
+}
+
+.room-panel-close {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ui-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+
+.room-player-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 46dvh;
+  overflow-y: auto;
+}
+
+.room-player {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ui-text);
+  padding: 6px 4px;
+  border-top: 1px solid var(--ui-border);
+}
+
+.room-player:first-child {
+  border-top: none;
+}
+
+.room-player-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.room-host-badge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ui-muted);
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 2px 6px;
+}
+
+.room-kick {
+  font: inherit;
+  font-size: 12px;
+  color: #e5484d;
+  background: none;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+
+.room-kick:hover {
+  border-color: #e5484d;
+}
+
+/* ---- transient notices ---- */
+/* The toast and the reconnect banner share the centered column but never the
+   same vertical slot: the toast sits just under the top row, the banner a row
+   below it, so a kick toast and a reconnect banner can show together. */
+.room-toast {
+  position: absolute;
+  top: calc(max(10px, env(safe-area-inset-top)) + 56px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  font-size: 12px;
+  color: var(--ui-text);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 5px 12px;
+  pointer-events: none;
+  white-space: nowrap;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.room-toast-warn {
+  color: #e5484d;
+}
+
+.room-banner {
+  position: absolute;
+  top: calc(max(10px, env(safe-area-inset-top)) + 88px);
+  left: 50%;
+  right: auto;
+  transform: translateX(-50%);
+  z-index: 3;
+  font-size: 12px;
+  color: var(--ui-text);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 5px 12px;
+  pointer-events: none;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+/* ---- blocking screens ---- */
+.room-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(12, 12, 14, 0.42);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.room-overlay-card {
+  width: min(360px, 100%);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 16px;
+  padding: 20px;
+  text-align: center;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.3);
+}
+
+.room-overlay-card p {
+  margin: 0 0 16px;
+  font-size: 15px;
+  line-height: 1.45;
+  color: var(--ui-text);
+}
+
+.room-overlay-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+
+.room-primary,
+.room-secondary {
+  font: inherit;
+  font-size: 14px;
+  border-radius: 999px;
+  padding: 8px 16px;
+  cursor: pointer;
+}
+
+.room-primary {
+  color: #fff;
+  background: #1d1d1f;
+  border: 1px solid #1d1d1f;
+}
+
+.room-secondary {
+  color: var(--ui-text);
+  background: transparent;
+  border: 1px solid var(--ui-border);
+}
+
+/* ---- /rooms home ---- */
+.rooms-home {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+.rooms-card {
+  width: min(420px, 100%);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 18px;
+  padding: 24px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.16);
+}
+
+.rooms-title {
+  margin: 0 0 8px;
+  font-size: 24px;
+  letter-spacing: -0.01em;
+  color: var(--ui-text);
+}
+
+.rooms-sub {
+  margin: 0 0 20px;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ui-muted);
+}
+
+.rooms-sub code {
+  font-size: 12px;
+  color: var(--ui-text);
+}
+
+.rooms-create {
+  font: inherit;
+  font-size: 15px;
+  width: 100%;
+  color: #fff;
+  background: #1d1d1f;
+  border: 1px solid #1d1d1f;
+  border-radius: 999px;
+  padding: 11px 16px;
+  cursor: pointer;
+}
+
+.rooms-create:disabled,
+.rooms-join-button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.rooms-join {
+  margin-top: 20px;
+}
+
+.rooms-label {
+  display: block;
+  font-size: 13px;
+  color: var(--ui-muted);
+  margin-bottom: 6px;
+}
+
+.rooms-join-row {
+  display: flex;
+  gap: 8px;
+}
+
+.rooms-input {
+  font: inherit;
+  font-size: 16px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  flex: 1;
+  min-width: 0;
+  color: var(--ui-text);
+  background: transparent;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 9px 14px;
+  outline: none;
+}
+
+.rooms-input:focus {
+  border-color: var(--ui-text);
+}
+
+.rooms-join-button {
+  font: inherit;
+  font-size: 14px;
+  color: var(--ui-text);
+  background: transparent;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 9px 16px;
+  cursor: pointer;
+}
+
+.rooms-join-button:hover {
+  border-color: var(--ui-text);
+}
+
+.rooms-error {
+  margin: 14px 0 0;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #e5484d;
+}
+
+/* ---- game header (v2 Phase 3 step 3) ---- */
+/* A single zone above the paper that is a pure renderer of server frames:
+   the round, the countdown, the hint, and the pick/reveal/scores prompts.
+   It reuses the same surfaces as the rest of the room chrome. It flows inside
+   .room-top-left, so it wraps under the name pill rather than overlapping it. */
+.game-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.game-header-card {
+  padding: 8px 12px;
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 14px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+
+.game-round {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--ui-text);
+  white-space: nowrap;
+}
+
+.game-clock {
+  font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ui-text);
+}
+
+.game-hint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 15px;
+  letter-spacing: 0.18em;
+  color: var(--ui-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.game-note {
+  font-size: 12px;
+  color: var(--ui-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.game-word {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ui-text);
+}
+
+.game-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.game-choice {
+  font: inherit;
+  font-size: 13px;
+  color: var(--ui-text);
+  background: transparent;
+  border: 1px solid var(--ui-border);
+  border-radius: 999px;
+  padding: 6px 12px;
+  cursor: pointer;
+}
+
+.game-choice:hover {
+  border-color: var(--ui-text);
+}
+
+/* ---- scoreboards (v2 Phase 3 scoreboards) ---- */
+/* Pure renderings of server frames, kept inside the header card so the paper
+   is never covered while anyone is drawing (the board only appears in the
+   reveal/scores/game_over phases, when the paper is read-only). Portrait
+   first: rows are a wrapping flex line, names shrink and ellipsize, totals
+   stay tabular. All values come from roomsScores.js — same surfaces and
+   variables as the rest of the header. */
+.game-gains {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.game-gain {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--ui-muted);
+  white-space: nowrap;
+}
+
+.game-gain-points {
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--ui-text);
+}
+
+.game-scores {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.game-score-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ui-text);
+  min-width: 0;
+}
+
+.game-score-rank {
+  flex: none;
+  width: 1.5em;
+  text-align: right;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ui-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.game-score-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.game-flag {
+  flex: none;
+  font-size: 12px;
+  line-height: 1;
+}
+
+.game-score-total {
+  flex: none;
+  margin-left: auto;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The player list shows each player's current total beside the name. */
+.room-player-score {
+  flex: none;
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ui-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- room toolbar fit (v2 rooms UI fixes) ---- */
+/* The plaza toolbar is one non-wrapping row: 8 swatches at 26 px plus the
+   S/M/L brushes need ~388 px, so at 320 px the row overflowed and S/M/L
+   jammed the right edge at a different height. Rooms wrap instead: the
+   swatch group and the brush group may sit on two lines, every control stays
+   inside the bar, and the swatches keep their 26 px size (the plaza value).
+   Scoped to .room-screen so the plaza toolbar is untouched. */
+.room-screen .toolbar-row {
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  row-gap: 8px;
+}
+
+.room-screen .swatches {
+  flex: 0 1 auto;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-content: center;
+}
+
+.room-screen .brushes {
+  flex: 0 0 auto;
+  align-items: center;
+}
+
+/* Keep every control aligned to the same baseline inside a wrapped row. */
+.room-screen .swatch,
+.room-screen .brush {
+  align-self: center;
+}
+
+/* ---- guess bar (v2 Phase 3 step 4a) ---- */
+/* Sits at the bottom where the toolbar would be (a non-drawer has none), so
+   the keyboard opens right under the input and the paper above stays visible.
+   16px input text stops iOS Safari from zooming the page on focus. */
+.game-guess {
+  position: absolute;
+  left: 50%;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 3;
+  width: min(440px, calc(100vw - 20px));
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: stretch;
+}
+
+.game-guess-form {
+  display: flex;
+  gap: 8px;
+}
+
+.game-guess-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font: inherit;
+  font-size: 16px;
+  color: var(--ui-text);
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  outline: none;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+.game-guess-feedback {
+  font-size: 12px;
+  color: var(--ui-muted);
+  text-align: center;
+}
+
+.game-guess-close {
+  color: var(--ui-text);
+  font-weight: 600;
+}
+
+.game-guess-ok {
+  color: #30a46c;
+  font-weight: 600;
+}
+
+.game-guess-correct {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ui-text);
+  text-align: center;
+  padding: 6px 10px;
+  background: var(--ui-bg);
+  border: 1px solid var(--ui-border);
+  border-radius: 12px;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+

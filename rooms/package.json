@@ -1,0 +1,24 @@
+{
+  "name": "doodlescrap-rooms",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "DoodleScrap v2 game room server: Cloudflare Worker + Durable Objects",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "deploy:dev": "wrangler deploy --env dev",
+    "deploy:prod": "wrangler deploy --env production",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail",
+    "test": "node tests/run.mjs"
+  },
+  "dependencies": {
+    "jose": "^5.9.6"
+  },
+  "devDependencies": {
+    "@supabase/supabase-js": "^2.118.0",
+    "undici": "^7.29.1",
+    "wrangler": "^4.151.1",
+    "ws": "^8.22.0"
+  }
+}

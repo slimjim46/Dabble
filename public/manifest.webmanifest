@@ -1,6 +1,6 @@
 {
-  "name": "Dabble",
-  "short_name": "Dabble",
+  "name": "DoodleScrap",
+  "short_name": "DoodleScrap",
   "description": "Anonymous real-time collaborative drawing canvas.",
   "start_url": "/",
   "display": "standalone",

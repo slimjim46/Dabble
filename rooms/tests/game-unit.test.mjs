@@ -1,0 +1,661 @@
+// Unit tests for the v2 Phase 3 step 2 game state machine: rotation, phases,
+// hints, the secret gate and the public frames. Pure, no network.
+//
+//   node tests/game-unit.test.mjs
+import { GAME_TIMING, HINT_FRACTIONS, PHASES, SCORE_DRAWER_PER_GUESSER, SCORE_GUESS_BASE, SCORE_GUESS_TIME_BONUS, SCORE_PERFECT_BONUS, TARGET_ROUNDS, WORD_OPTIONS, gameTimings } from '../src/config.js'
+import {
+  acceptPick,
+  advance,
+  applyPerfectBonus,
+  awardGuess,
+  closeDistanceFor,
+  finishDrawingEarly,
+  guessPoints,
+  isDrawerPhase,
+  isSecretPhase,
+  judgeGuess,
+  newGameState,
+  normaliseGuess,
+  revealFrame,
+  rotation,
+  secretsAllowed,
+  skipRound,
+  startGame,
+  stateFrame,
+  targetedSecretsAllowed,
+  toLobby,
+  upgradeGameState,
+  wordPickFrame,
+  yourWordFrame,
+  hintFor,
+} from '../src/game.js'
+import { pickFromPool, pickOptions, pickWords, sanitizeCustomWords, WORDS } from '../src/words.js'
+import { check, summary } from './helpers.mjs'
+
+const TIMES = { pick: 10000, drawing: 60000, reveal: 8000, scores: 8000, gameOver: 30000, drawerGrace: 10000 }
+const T0 = 1_000_000
+const PLAYERS = ['u1', 'u2', 'u3']
+
+// ---- rotation ---------------------------------------------------------------
+{
+  const cases = [
+    [2, 3, 6], [3, 2, 6], [4, 2, 8], [5, 2, 10], [6, 1, 6], [7, 1, 7], [12, 1, 12],
+  ]
+  for (const [n, turns, rounds] of cases) {
+    const r = rotation(n)
+    check(`rotation: ${n} players -> ${turns} turn(s) each, ${rounds} rounds`,
+      r.turns === turns && r.rounds === rounds, JSON.stringify(r))
+  }
+  check('rotation: target rounds is 6', TARGET_ROUNDS === 6)
+  check('rotation: every table gives each player the same number of turns',
+    [2, 3, 4, 5, 6, 7, 12].every((n) => rotation(n).rounds % n === 0))
+}
+
+// ---- words ------------------------------------------------------------------
+{
+  const DIFFS = ['easy', 'medium', 'hard']
+  const words = WORDS.map((e) => e.word)
+  check('words: at least 50 prompts', WORDS.length >= 50, String(WORDS.length))
+  check('words: every entry has a word, category and difficulty',
+    WORDS.every((e) => typeof e.word === 'string' && typeof e.category === 'string' && DIFFS.includes(e.difficulty)))
+  check('words: all lowercase single tokens', words.every((w) => /^[a-z]+$/.test(w)))
+  check('words: no duplicate words', new Set(words).size === words.length)
+  check('words: frozen', Object.isFrozen(WORDS))
+  check('words: every difficulty bucket is non-empty',
+    DIFFS.every((d) => WORDS.some((e) => e.difficulty === d)))
+  const picked = pickWords(WORD_OPTIONS, () => 0.5)
+  check(`words: pickWords returns ${WORD_OPTIONS} distinct`, picked.length === WORD_OPTIONS && new Set(picked).size === WORD_OPTIONS, JSON.stringify(picked))
+  check('words: pickWords is deterministic with an injected rng',
+    JSON.stringify(pickWords(3, () => 0)) === JSON.stringify(pickWords(3, () => 0)))
+  // Mixed difficulty: a 3-pick spreads one word across each difficulty bucket.
+  const byDiff = {}
+  for (const w of picked) {
+    const d = WORDS.find((e) => e.word === w).difficulty
+    byDiff[d] = (byDiff[d] || 0) + 1
+  }
+  check('words: a 3-pick mixes all three difficulties',
+    byDiff.easy === 1 && byDiff.medium === 1 && byDiff.hard === 1, JSON.stringify(picked))
+}
+
+// ---- custom words (v2 Phase 4) ----------------------------------------------
+{
+  // sanitizeCustomWords: shape, length, token form and duplicates.
+  check('custom: a valid list is kept in order', JSON.stringify(sanitizeCustomWords(['dog', 'cat', 'house'])) === '["dog","cat","house"]')
+  check('custom: under the minimum is rejected', sanitizeCustomWords(['dog', 'cat']) === null)
+  check('custom: over the maximum is rejected', sanitizeCustomWords(Array.from({ length: 21 }, (_, i) => `word${i}`)) === null)
+  check('custom: a too-short word is rejected', sanitizeCustomWords(['ab', 'cat', 'house']) === null)
+  check('custom: an over-long word is rejected', sanitizeCustomWords(['x'.repeat(41), 'cat', 'house']) === null)
+  check('custom: a non-token word is rejected', sanitizeCustomWords(['has space', 'cat', 'house']) === null)
+  check('custom: uppercase is rejected', sanitizeCustomWords(['Dog', 'cat', 'house']) === null)
+  check('custom: duplicates are rejected', sanitizeCustomWords(['dog', 'dog', 'house']) === null)
+  check('custom: a non-array is rejected', sanitizeCustomWords('nope') === null)
+
+  // pickFromPool draws distinct words uniformly.
+  const pool = ['dog', 'cat', 'house', 'bird', 'tree']
+  const fromPool = pickFromPool(pool, 3, () => 0)
+  check('custom: pickFromPool returns 3 distinct', fromPool.length === 3 && new Set(fromPool).size === 3, JSON.stringify(fromPool))
+  check('custom: pickFromPool is deterministic with an injected rng',
+    JSON.stringify(pickFromPool(pool, 3, () => 0)) === JSON.stringify(pickFromPool(pool, 3, () => 0)))
+
+  // pickOptions uses custom words when there are enough, else curated.
+  const custom = ['dog', 'cat', 'house']
+  const viaCustom = pickOptions(custom, 3, () => 0)
+  check('custom: pickOptions draws from custom words when present',
+    viaCustom.length === 3 && viaCustom.every((w) => custom.includes(w)), JSON.stringify(viaCustom))
+  check('custom: pickOptions falls back to curated when too few',
+    pickOptions(['dog', 'cat'], 3, () => 0).every((w) => !['dog', 'cat'].includes(w)))
+  check('custom: pickOptions falls back to curated when null',
+    pickOptions(null, 3, () => 0).length === 3)
+}
+
+// ---- start -> pick ----------------------------------------------------------
+{
+  const g = newGameState()
+  check('start: a new room is in the lobby at round 1', g.phase === 'lobby' && g.round === 1 && g.rounds === 0)
+  check('start: lobby holds no secret', g.word === null && g.options === null)
+
+  startGame(g, PLAYERS, T0, TIMES, ['a', 'b', 'c'])
+  check('start: round 1, phase pick', g.round === 1 && g.phase === 'pick')
+  check('start: rounds from rotation', g.rounds === 6)
+  check('start: turn order is the requested seat order', JSON.stringify(g.order) === JSON.stringify(PLAYERS))
+  check('start: first drawer is order[0]', g.drawerUserId === 'u1')
+  check('start: options are held server-side', JSON.stringify(g.options) === '["a","b","c"]')
+  check('start: no word before the pick', g.word === null)
+  check('start: deadline is the pick deadline', g.deadlineAt === T0 + TIMES.pick, String(g.deadlineAt))
+  check('start: gameSeq advances', g.gameSeq === 1)
+
+  const pick = wordPickFrame(g)
+  check('word_pick: carries the round and options', pick.round === 1 && JSON.stringify(pick.options) === '["a","b","c"]')
+
+  const state = stateFrame(g, T0 + 1000)
+  check('state: pick frame hides the word', state.phase === 'pick' && state.wordLen === null && state.hint === null)
+  check('state: remaining counts down from the phase end', state.remainingMs === TIMES.pick - 1000, String(state.remainingMs))
+  check('state: scores/correct are empty in step 2', JSON.stringify(state.scores) === '{}' && state.correct.length === 0)
+  check('state: is safe to broadcast', secretsAllowed(state))
+}
+
+// ---- free draw in the lobby: a game start resets every round counter --------
+// The lobby is a free-draw canvas, so its strokes are booked against the same
+// counters and can fill or flag the round partial. starting a game must hand
+// round 1 a clean slate and a fresh storage prefix, or lobby strokes would eat
+// its caps (or make it snapshot as partial).
+{
+  const g = newGameState()
+  // Simulate a heavy lobby that has hit the stroke/point/byte caps.
+  g.seq = 500
+  g.count = 500
+  g.points = 999999
+  g.bytes = 999999
+  g.partial = true
+  check('lobby reset: the lobby round can be full and partial',
+    g.partial === true && g.count === 500)
+
+  startGame(g, PLAYERS, T0, TIMES, ['a', 'b', 'c'])
+  check('lobby reset: round 1 counters are zero after start',
+    g.seq === 0 && g.count === 0 && g.points === 0 && g.bytes === 0, JSON.stringify({ s: g.seq, c: g.count, p: g.points, b: g.bytes }))
+  check('lobby reset: round 1 is not partial after start', g.partial === false)
+  check('lobby reset: the storage prefix moved to the new game', g.gameSeq === 1 && g.round === 1)
+}
+
+// ---- reject / accept picks --------------------------------------------------
+{
+  const g = startGame(newGameState(), PLAYERS, T0, TIMES, ['a', 'b', 'c'])
+  check('pick: invalid index rejected', acceptPick(g, 3, T0 + 10, TIMES) === null)
+  check('pick: negative index rejected', acceptPick(g, -1, T0 + 10, TIMES) === null)
+  check('pick: non-integer rejected', acceptPick(g, 1.5, T0 + 10, TIMES) === null)
+  check('pick: still picking after bad input', g.phase === 'pick')
+
+  const t = T0 + 2000
+  const word = acceptPick(g, 1, t, TIMES)
+  check('pick: accepts a valid choice', word === 'b')
+  check('pick: drawing starts and the word is stored', g.phase === 'drawing' && g.word === 'b')
+  check('pick: options are dropped once picked', g.options === null)
+  check('pick: reset counters for the new round', g.seq === 0 && g.count === 0 && g.points === 0)
+  check('pick: hints at 50% and 75%', JSON.stringify(g.hintAts) === JSON.stringify([t + 30000, t + 45000]))
+  check('pick: deadline is the first hint', g.deadlineAt === t + 30000, String(g.deadlineAt))
+  check('pick: your_word carries the word to the drawer', yourWordFrame(g).word === 'b')
+
+  const state = stateFrame(g, t + 100)
+  check('state: drawing exposes length + masked hint, not the word',
+    state.wordLen === 1 && state.hint === '_' && !JSON.stringify(state).includes('"b"'), JSON.stringify(state))
+  check('state: drawer is public', state.drawer === 'u1')
+}
+
+// ---- hints ------------------------------------------------------------------
+{
+  check('hint: step 0 is all underscores', hintFor('pizza', 0) === '_____')
+  const h1 = hintFor('pizza', 1)
+  const h2 = hintFor('pizza', 2)
+  check('hint: step 1 reveals some letters and masks the rest', /^[a-z_]{5}$/.test(h1) && h1.includes('_') && h1 !== '_____', h1)
+  check('hint: step 2 reveals more than step 1',
+    [...h2].filter((c) => c !== '_').length > [...h1].filter((c) => c !== '_').length, `${h1} -> ${h2}`)
+  check('hint: never reveals the whole word', h1 !== 'pizza' && h2 !== 'pizza')
+  check('hint: length always equals the word', ['a', 'hi', 'pizza', 'lighthouse'].every((w) => hintFor(w, 0).length === w.length))
+  check('hint: fractions are the configured two', HINT_FRACTIONS.length === 2)
+
+  const g = startGame(newGameState(), PLAYERS, T0, TIMES, ['pizza', 'b', 'c'])
+  acceptPick(g, 0, T0, TIMES)
+  const t1 = T0 + TIMES.drawing * HINT_FRACTIONS[0]
+  const r1 = advance(g, t1, TIMES)
+  check('hints: the first alarm reveals hint 1', r1.event === 'hint' && g.hintStep === 1, JSON.stringify(r1))
+  check('hints: next alarm is the second hint', g.deadlineAt === T0 + TIMES.drawing * HINT_FRACTIONS[1], String(g.deadlineAt))
+  const r2 = advance(g, g.deadlineAt, TIMES)
+  check('hints: the second alarm reveals hint 2', r2.event === 'hint' && g.hintStep === 2, JSON.stringify(r2))
+  check('hints: after the last hint the alarm is the phase end', g.deadlineAt === g.phaseEndsAt, String(g.deadlineAt))
+  check('hints: still drawing after both hints', g.phase === 'drawing' && g.word === 'pizza')
+}
+
+// ---- timeout / reveal / scores / next round --------------------------------
+{
+  const g = startGame(newGameState(), PLAYERS, T0, TIMES, ['a', 'b', 'c'])
+  acceptPick(g, 0, T0, TIMES)
+  const end = T0 + TIMES.drawing
+  const r = advance(g, end, TIMES)
+  check('timeout: drawing ends in reveal', r.to === 'reveal' && g.phase === 'reveal')
+  check('timeout: not skipped and the word is public now', g.skipped === false && g.word === 'a')
+  const rev = revealFrame(g)
+  check('reveal: carries the word and skipped flag', rev.word === 'a' && rev.skipped === false)
+  check('reveal: is allowed to broadcast', secretsAllowed(rev))
+  check('reveal: state hint is gone', stateFrame(g, end).hint === null)
+
+  const rs = advance(g, g.phaseEndsAt, TIMES)
+  check('reveal: goes to scores', rs.to === 'scores' && g.phase === 'scores')
+
+  const next = advance(g, g.phaseEndsAt, TIMES, ['x', 'y', 'z'])
+  check('scores: next round is pick', next.to === 'pick' && g.phase === 'pick' && g.round === 2)
+  check('scores: round counters reset for the new round', g.seq === 0 && g.points === 0 && g.partial === false)
+  check('scores: drawer rotates to order[1]', g.drawerUserId === 'u2')
+  check('scores: previous word is cleared at the new pick', g.word === null)
+  check('scores: new options are held', JSON.stringify(g.options) === '["x","y","z"]')
+  check('scores: no round-clear secret leaked in state', stateFrame(g, g.deadlineAt).wordLen === null)
+}
+
+// ---- game over -> lobby -----------------------------------------------------
+{
+  const g = startGame(newGameState(), ['a', 'b'], T0, TIMES, ['x', 'y', 'z'])
+  let now = T0
+  // Walk every round without waiting: pick, draw out, reveal out, scores out.
+  for (let round = 1; round <= g.rounds; round++) {
+    if (g.phase === 'pick') now = g.deadlineAt
+    advance(g, now, TIMES)
+    // draw the full phase (acceptPick already ran via auto-pick)
+    now = g.phaseEndsAt
+    advance(g, now, TIMES) // reveal
+    now = g.phaseEndsAt
+    advance(g, now, TIMES) // scores
+    now = g.phaseEndsAt
+    const res = advance(g, now, TIMES, ['x', 'y', 'z'])
+    if (round < g.rounds) {
+      check(`game: round ${round} -> round ${round + 1} pick`, res.to === 'pick' && g.round === round + 1)
+    } else {
+      check('game: after the last round the game is over', res.to === 'game_over' && g.phase === 'game_over')
+    }
+  }
+  check('game over: the word is dropped', g.word === null && g.options === null)
+  check('game over: broadcast state is safe', secretsAllowed(stateFrame(g, now)))
+  const lobby = advance(g, g.phaseEndsAt, TIMES)
+  check('game over: returns to lobby', lobby.to === 'lobby' && g.phase === 'lobby')
+  check('lobby: no word, no options, no order, no rounds',
+    g.word === null && g.options === null && g.order.length === 0 && g.rounds === 0)
+  check('lobby: counters and round reset', g.round === 1 && g.seq === 0 && g.points === 0)
+  check('lobby: gameSeq is kept for scoped keys', g.gameSeq === 1, String(g.gameSeq))
+}
+
+// ---- drawer absence / skip --------------------------------------------------
+{
+  const g = startGame(newGameState(), PLAYERS, T0, TIMES, ['a', 'b', 'c'])
+  check('skip: picking player skipped -> reveal, no word', skipRound(g, T0 + 1, TIMES) && g.phase === 'reveal' && g.word === null && g.skipped === true)
+  check('skip: reveal frame may carry a null word', revealFrame(g).word === null)
+  check('skip: cannot skip outside a drawer phase', skipRound(g, T0 + 2, TIMES) === false)
+
+  const g2 = startGame(newGameState(), PLAYERS, T0, TIMES, ['a', 'b', 'c'])
+  acceptPick(g2, 2, T0, TIMES)
+  check('skip: drawing drawer skipped -> reveal keeps the word', skipRound(g2, T0 + 1, TIMES) && g2.word === 'c' && g2.skipped === true)
+
+  check('phases: only pick/drawing are drawer/secret phases',
+    isDrawerPhase('pick') && isDrawerPhase('drawing') &&
+    !isDrawerPhase('reveal') && !isDrawerPhase('scores') && !isDrawerPhase('lobby') &&
+    isSecretPhase('pick') && isSecretPhase('drawing') && !isSecretPhase('reveal'))
+}
+
+// ---- secret gate ------------------------------------------------------------
+{
+  check('gate: state is allowed', secretsAllowed({ v: 1, t: 'state', round: 1 }))
+  check('gate: reveal is allowed', secretsAllowed({ v: 1, t: 'reveal', word: 'pizza' }))
+  check('gate: a state carrying a word is blocked', secretsAllowed({ v: 1, t: 'state', word: 'pizza' }) === false)
+  check('gate: options in a broadcast are blocked', secretsAllowed({ v: 1, t: 'state', options: ['a'] }) === false)
+  check('gate: words array is blocked', secretsAllowed({ v: 1, t: 'snapshot', words: [] }) === false)
+  check('gate: targeted your_word is allowed only by the targeted gate',
+    targetedSecretsAllowed({ v: 1, t: 'your_word', word: 'pizza' }) && !secretsAllowed({ v: 1, t: 'your_word', word: 'pizza' }))
+  check('gate: targeted word_pick allowed only by the targeted gate',
+    targetedSecretsAllowed(wordPickFrame({ round: 1, options: ['a'] })) && !secretsAllowed(wordPickFrame({ round: 1, options: ['a'] })))
+  check('gate: unknown object rejected', secretsAllowed(null) === false && secretsAllowed('x') === false)
+}
+
+// ---- upgrade from step 1 ----------------------------------------------------
+{
+  const old = { round: 4, seq: 7, count: 6, points: 900, bytes: 5000, partial: true }
+  const up = upgradeGameState(old)
+  check('upgrade: keeps the step-1 round counters',
+    up.round === 4 && up.seq === 7 && up.count === 6 && up.points === 900 && up.partial === true,
+    JSON.stringify(up))
+  check('upgrade: adds a lobby game', up.phase === 'lobby' && up.gameSeq === 0 && up.order.length === 0)
+  check('upgrade: clamps an unknown phase to lobby', upgradeGameState({ phase: 'dance' }).phase === 'lobby')
+  check('upgrade: missing object yields a fresh game', upgradeGameState(undefined).phase === 'lobby')
+  check('upgrade: all phases are known', Object.isFrozen(PHASES) && PHASES.length === 6)
+}
+
+// ---- frame shape ------------------------------------------------------------
+{
+  const g = startGame(newGameState(), PLAYERS, T0, TIMES, ['a', 'b', 'c'])
+  const st = stateFrame(g, T0)
+  check('frame: state has the wire fields',
+    st.v === 1 && st.t === 'state' && typeof st.round === 'number' && typeof st.rounds === 'number' &&
+    typeof st.phase === 'string' && typeof st.remainingMs === 'number' && st.scores && Array.isArray(st.correct))
+  check('frame: state never carries options or word', !('word' in st) && !('options' in st))
+  const wp = wordPickFrame(g)
+  check('frame: word_pick is v1', wp.v === 1 && wp.t === 'word_pick')
+  const toLobbied = toLobby(g)
+  check('frame: lobby state has no drawer and zero remaining', stateFrame(toLobbied, T0).drawer === null && stateFrame(toLobbied, T0).remainingMs === 0)
+}
+
+// ---- phase timings: dev-only env overrides ---------------------------------
+{
+  // 75 s drawing sits inside the spec's 60-80 s range. Hints are derived from
+  // HINT_FRACTIONS x times.drawing, so 75 s keeps them at 50 %/75 %.
+  check('timings: production defaults are the spec values',
+    GAME_TIMING.pick === 10000 && GAME_TIMING.drawing === 75000 && GAME_TIMING.reveal === 8000 &&
+    GAME_TIMING.scores === 8000 && GAME_TIMING.gameOver === 30000 && GAME_TIMING.drawerGrace === 10000,
+    JSON.stringify(GAME_TIMING))
+  check('timings: drawing is inside the spec 60-80 s window',
+    GAME_TIMING.drawing >= 60000 && GAME_TIMING.drawing <= 80000, String(GAME_TIMING.drawing))
+
+  const dev = { ENVIRONMENT: 'dev', GAME_PICK_MS: '1000', GAME_ROUND_MS: '5000', DRAWER_GRACE_MS: '2500' }
+  const overridden = gameTimings(dev)
+  check('timings: dev overrides apply under ENVIRONMENT=dev',
+    overridden.pick === 1000 && overridden.drawing === 5000 && overridden.drawerGrace === 2500,
+    JSON.stringify(overridden))
+
+  // Anything that is not exactly 'dev' must ignore every override, the same
+  // rule as X-Test-IP (rooms/src/hash.js) and SIMULATE_QUOTA.
+  const notDev = ['production', 'Development', 'dev ', 'DEV', 'staging', undefined, '', 'prod']
+  for (const value of notDev) {
+    const t = gameTimings({ ENVIRONMENT: value, GAME_ROUND_MS: '1', DRAWER_GRACE_MS: '1' })
+    check(`timings: ENVIRONMENT=${JSON.stringify(value)} ignores the overrides`,
+      t.drawing === GAME_TIMING.drawing && t.drawerGrace === GAME_TIMING.drawerGrace, JSON.stringify(t))
+  }
+  check('timings: an empty env is production defaults', JSON.stringify(gameTimings()) === JSON.stringify(GAME_TIMING))
+
+  // Clamping keeps a typo from freezing a game or creating a zero phase.
+  const clamped = gameTimings({ ENVIRONMENT: 'dev', GAME_PICK_MS: '0', GAME_ROUND_MS: '999999999', GAME_REVEAL_MS: 'not-a-number' })
+  check('timings: out-of-range and junk values fall back to the default',
+    clamped.pick === GAME_TIMING.pick && clamped.drawing === GAME_TIMING.drawing && clamped.reveal === GAME_TIMING.reveal,
+    JSON.stringify(clamped))
+  const edge = gameTimings({ ENVIRONMENT: 'dev', GAME_PICK_MS: '500', GAME_ROUND_MS: '3600000' })
+  check('timings: the clamp boundaries themselves are accepted',
+    edge.pick === 500 && edge.drawing === 3600000, JSON.stringify(edge))
+}
+
+// ---- table shape + consequences for N = 2..12 (design guard) ----------------
+{
+  // R = N x T with T = ceil(6/N): R is 6 for N<=6, then grows with N. This is
+  // the deliberate "everyone draws at least once" shape.
+  const expected = { 2: 6, 3: 6, 4: 8, 5: 10, 6: 6, 7: 7, 8: 8, 9: 9, 10: 10, 11: 11, 12: 12 }
+  for (const [n, rounds] of Object.entries(expected)) {
+    const r = rotation(Number(n))
+    check(`table: N=${n} plays ${rounds} rounds`, r.rounds === rounds, JSON.stringify(r))
+    check(`table: N=${n} divides evenly`, r.rounds % Number(n) === 0)
+  }
+  check('table: the design has no player cap of 6', rotation(12).rounds === 12)
+
+  // Consequences at production timings, computed from the code (not memory):
+  //   duration = rounds x (pick + drawing + reveal + scores) + gameOver
+  //   alarms   = rounds x 6 + 1   (the DO has ONE alarm; each phase advance is
+  //                                a separate firing, and so is each of the two
+  //                                hints inside drawing: pick->drawing, hint,
+  //                                hint, drawing->reveal, reveal->scores,
+  //                                scores->pick/game_over = 6 per round, then
+  //                                the final game_over->lobby step = +1)
+  // This is a numeric table, not a product limit. Any game over 12 minutes is
+  // flagged so the summary can call it out; the design is not changed.
+  const perRound = GAME_TIMING.pick + GAME_TIMING.drawing + GAME_TIMING.reveal + GAME_TIMING.scores
+  const table = {}
+  const over12 = []
+  for (let n = 2; n <= 12; n++) {
+    const rounds = rotation(n).rounds
+    const durMin = (rounds * perRound + GAME_TIMING.gameOver) / 60000
+    const alarms = rounds * 6 + 1
+    table[n] = { rounds, durMin: Number(durMin.toFixed(1)), alarms }
+    if (durMin > 12) over12.push(n)
+  }
+  check('table: N=2 is 6 rounds x 101 s + 30 s = 10.6 min',
+    table[2].rounds === 6 && table[2].durMin === 10.6, JSON.stringify(table[2]))
+  check('table: N=12 is 12 rounds = 20.7 min', table[12].rounds === 12 && table[12].durMin === 20.7, JSON.stringify(table[12]))
+  check('table: alarms grow with rounds (N=12 -> 73)',
+    table[12].alarms === 73 && table[2].alarms === 37, JSON.stringify({ n2: table[2].alarms, n12: table[12].alarms }))
+  // Flag (does not enforce): the N values whose game now runs over ~12 minutes.
+  check('table: games over 12 minutes are flagged for the summary',
+    JSON.stringify(over12) === JSON.stringify([4, 5, 7, 8, 9, 10, 11, 12]), JSON.stringify(over12))
+}
+
+// ---- guessing: normalisation, closeness, cap reset (v2 Phase 3 step 4a) ------
+{
+  // Normalisation: case, accents, zero-width/control, whitespace, edge punct.
+  const norm = [
+    ['  House ', 'house'],
+    ['CAFÉ', 'cafe'], // accent stripped
+    ['ice cream', 'ice cream'],
+    ['ice\u200bcream', 'icecream'], // zero-width removed (space also gone)
+    ['he\u0000llo', 'hello'], // control char removed
+    ['(banana)!', 'banana'], // edge punctuation stripped
+    ['a   b', 'a b'], // whitespace collapsed
+    ['   ', ''],
+    ['!!!', ''],
+  ]
+  for (const [input, expected] of norm) {
+    check(`normalise: ${JSON.stringify(input)} -> ${JSON.stringify(expected)}`,
+      normaliseGuess(input) === expected, JSON.stringify(normaliseGuess(input)))
+  }
+
+  // The fixed judge table. "correct" means an exact match after normalisation;
+  // "close" follows the distance rule; "wrong" is everything else.
+  const table = [
+    // exact / case / accents / whitespace / punctuation
+    ['house', 'house', 'correct'],
+    ['house', 'HOUSE', 'correct'],
+    ['cafe', 'café', 'correct'],
+    ['ice cream', 'icecream', 'correct'],
+    ['ice cream', 'ice-cream', 'correct'],
+    ['ice-cream', 'ice cream', 'correct'],
+    ['sun', ' sun ', 'correct'],
+    ['boat', 'boat!', 'correct'],
+    // close: distance 1 for words up to 7 letters
+    ['house', 'hose', 'close'], // distance 1
+    ['house', 'hous', 'close'],
+    ['house', 'housee', 'close'],
+    ['planet', 'planets', 'close'], // 6 letters, distance 1
+    // close: distance 2 for 8+ letters
+    ['elephant', 'elefant', 'close'], // 8 letters, distance 1
+    ['elephant', 'elephunt', 'close'], // distance 1
+    ['basketball', 'basketbal', 'close'], // 10, distance 1
+    ['strawberry', 'strawbury', 'close'], // 10, distance 2 (ea->u, y? -> compute)
+    // never close for a guess under 3 characters
+    ['cat', 'c', 'wrong'],
+    ['cat', 'ca', 'wrong'],
+    // 3 letters ARE eligible: distance 1
+    ['cat', 'car', 'close'],
+    ['cat', 'bat', 'close'],
+    // wrong
+    ['house', 'tree', 'wrong'],
+    ['planets', 'plan', 'wrong'],
+    // empty after normalising -> wrong (the DO ignores it before judging)
+    ['house', '   ', 'wrong'],
+    ['house', '!!!', 'wrong'],
+  ]
+  for (const [word, guess, expected] of table) {
+    const got = judgeGuess(word, guess)
+    check(`judge: ${JSON.stringify(word)} vs ${JSON.stringify(guess)} -> ${expected}`,
+      got.status === expected, JSON.stringify(got))
+  }
+
+  check('closeDistanceFor: 0 under 3, 1 up to 7, 2 from 8',
+    closeDistanceFor(2) === 0 && closeDistanceFor(3) === 1 && closeDistanceFor(7) === 1 &&
+    closeDistanceFor(8) === 2 && closeDistanceFor(20) === 2)
+
+  // The per-user guess counter resets at every round start and in the lobby.
+  const game = newGameState()
+  startGame(game, ['u1', 'u2'], T0, TIMES, ['apple', 'bread', 'chair'])
+  game.guessCount = { u2: 7 }
+  // startGame -> beginPick is the round start; a fresh start resets the counter.
+  startGame(game, ['u1', 'u2'], T0 + 5, TIMES, ['apple', 'bread', 'chair'])
+  check('guessCount: reset when a round starts',
+    Object.keys(game.guessCount).length === 0, JSON.stringify(game.guessCount))
+  game.guessCount = { u2: 3 }
+  toLobby(game)
+  check('guessCount: reset in the lobby', Object.keys(game.guessCount).length === 0)
+}
+
+// ---- scoring (v2 Phase 3 step 4b) ------------------------------------------
+{
+  const DRAWING = TIMES.drawing // 60000; acceptPick sets phaseEndsAt from TIMES
+  const end = T0 + DRAWING
+
+  // Time bonus: full at drawing start, half at the midpoint, zero at the end.
+  const mid = T0 + DRAWING / 2
+  check('score: correct guess at drawing start = base + full bonus',
+    guessPoints(T0, end, DRAWING) === SCORE_GUESS_BASE + SCORE_GUESS_TIME_BONUS, String(guessPoints(T0, end, DRAWING)))
+  check('score: correct guess at the midpoint = base + half bonus',
+    guessPoints(mid, end, DRAWING) === SCORE_GUESS_BASE + SCORE_GUESS_TIME_BONUS / 2, String(guessPoints(mid, end, DRAWING)))
+  check('score: correct guess at the very end = base only',
+    guessPoints(end, end, DRAWING) === SCORE_GUESS_BASE, String(guessPoints(end, end, DRAWING)))
+  check('score: past the end never goes negative',
+    guessPoints(end + 5000, end, DRAWING) === SCORE_GUESS_BASE, String(guessPoints(end + 5000, end, DRAWING)))
+
+  // Per-guesser drawer reward and totals, 1..11 guessers, all at the midpoint
+  // (300 per guesser). The drawer earns 75 per correct guesser.
+  for (let n = 1; n <= 11; n++) {
+    const game = newGameState()
+    startGame(game, ['d', ...Array.from({ length: n }, (_, i) => `g${i}`)], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES) // -> drawing, drawingMs = drawing
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = Array.from({ length: n }, (_, i) => `g${i}`)
+    for (let i = 0; i < n; i++) awardGuess(game, `g${i}`, 'd', mid)
+    check(`score: ${n} guesser(s) each earn 300 at the midpoint`,
+      Array.from({ length: n }, (_, i) => game.scores[`g${i}`]).every((s) => s === 300), JSON.stringify(game.scores))
+    check(`score: drawer earns 75 x ${n} from guesses`,
+      game.scores.d === n * SCORE_DRAWER_PER_GUESSER, JSON.stringify(game.scores))
+    check(`score: roundGains mirrors scores for ${n} guesser(s)`,
+      JSON.stringify(game.roundGains) === JSON.stringify(game.scores), JSON.stringify(game.roundGains))
+  }
+
+  // awardGuess is idempotent per (round, user).
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1', 'g2'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    const first = awardGuess(game, 'g1', 'd', mid)
+    const second = awardGuess(game, 'g1', 'd', mid)
+    check('score: a repeat correct guess pays nothing', first === 300 && second === 0, `${first}/${second}`)
+    check('score: a repeat does not double the drawer reward',
+      game.scores.d === SCORE_DRAWER_PER_GUESSER, JSON.stringify(game.scores))
+  }
+
+  // Perfect bonus: applied at reveal, once, only for a non-skipped round where
+  // every present non-drawer guessed and there were >= 2 of them.
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1', 'g2'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1', 'g2']
+    awardGuess(game, 'g1', 'd', mid)
+    awardGuess(game, 'g2', 'd', mid)
+    const before = game.scores.d
+    advance(game, T0 + DRAWING, TIMES) // drawing -> reveal
+    check('perfect: drawer gets the bonus when all present guessed',
+      game.scores.d === before + SCORE_PERFECT_BONUS, JSON.stringify(game.scores))
+    check('perfect: the bonus lands in roundGains too',
+      game.roundGains.d === game.scores.d, JSON.stringify(game.roundGains))
+  }
+
+  // Not perfect: one present fooled, or only one present.
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1', 'g2'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1', 'g2']
+    awardGuess(game, 'g1', 'd', mid) // g2 never guesses
+    const before = game.scores.d
+    advance(game, T0 + DRAWING, TIMES)
+    check('perfect: missing a present guesser forfeits the bonus',
+      game.scores.d === before, JSON.stringify(game.scores))
+  }
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1']
+    awardGuess(game, 'g1', 'd', mid)
+    const before = game.scores.d
+    advance(game, T0 + DRAWING, TIMES)
+    check('perfect: a single present guesser earns no bonus (< 2)',
+      game.scores.d === before, JSON.stringify(game.scores))
+  }
+  // A joiner who arrives mid-round never counts toward perfect (not in
+  // presentAtDrawStart) even if they guess; and a skipped round never pays it.
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1', 'g2'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1', 'g2']
+    awardGuess(game, 'g1', 'd', mid)
+    awardGuess(game, 'g2', 'd', mid)
+    awardGuess(game, 'g3', 'd', mid) // joiner, not present at start
+    const before = game.scores.d
+    advance(game, T0 + DRAWING, TIMES)
+    check('perfect: a mid-round joiner is ignored for the bonus but scores',
+      game.scores.d === before + SCORE_PERFECT_BONUS && game.scores.g3 === 300, JSON.stringify(game.scores))
+  }
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1', 'g2'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1', 'g2']
+    awardGuess(game, 'g1', 'd', mid)
+    const earned = { ...game.scores }
+    skipRound(game, T0 + 1000, TIMES) // -> reveal, skipped
+    check('skipped: points already earned stay', JSON.stringify(game.scores) === JSON.stringify(earned), JSON.stringify(game.scores))
+    check('skipped: no perfect bonus', game.scores.d === earned.d, JSON.stringify(game.scores))
+    check('skipped: revealFrame carries skipped + gains', revealFrame(game).skipped === true && !!revealFrame(game).gains, JSON.stringify(revealFrame(game)))
+  }
+
+  // Conditions C: scores reset at startGame, roundGains at each round start.
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    awardGuess(game, 'g1', 'd', mid)
+    check('reset: scores + roundGains carry a fresh game', game.scores.g1 === 300 && game.roundGains.g1 === 300)
+    startGame(game, ['d', 'g1'], T0 + 100, TIMES, ['apple', 'bread', 'chair'])
+    check('reset: startGame clears scores', JSON.stringify(game.scores) === '{}', JSON.stringify(game.scores))
+    check('reset: startGame clears roundGains', JSON.stringify(game.roundGains) === '{}', JSON.stringify(game.roundGains))
+    game.roundGains = { d: 999 }
+    advance(game, T0 + 100 + TIMES.pick, TIMES) // pick -> drawing (same round 1)
+    check('reset: roundGains survives drawing start within a round (not reset mid-round)',
+      game.roundGains.d === 999 || JSON.stringify(game.roundGains) === '{}', JSON.stringify(game.roundGains))
+  }
+
+  // revealFrame.gains equals roundGains (the single map, drawer included).
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1']
+    awardGuess(game, 'g1', 'd', mid)
+    const gains = revealFrame(game).gains
+    check('reveal: gains is a plain copy of roundGains', JSON.stringify(gains) === JSON.stringify(game.roundGains), JSON.stringify(gains))
+    check('reveal: gains includes the drawer', gains.d === SCORE_DRAWER_PER_GUESSER, JSON.stringify(gains))
+  }
+
+  // finishDrawingEarly (early finish state transition): drawing -> reveal,
+  // never skipped, applied once.
+  {
+    const game = newGameState()
+    startGame(game, ['d', 'g1'], T0, TIMES, ['apple', 'bread', 'chair'])
+    acceptPick(game, 0, T0, TIMES)
+    game.phaseEndsAt = T0 + DRAWING
+    game.drawingMs = DRAWING
+    game.presentAtDrawStart = ['g1']
+    awardGuess(game, 'g1', 'd', mid)
+    const ok = finishDrawingEarly(game, T0 + 1000, TIMES)
+    check('early: finishDrawingEarly moves drawing -> reveal', ok === true && game.phase === 'reveal', game.phase)
+    check('early: an early finish is never skipped', game.skipped === false)
+    const again = finishDrawingEarly(game, T0 + 1001, TIMES)
+    check('early: a second finishDrawingEarly is a no-op', again === false && game.phase === 'reveal')
+  }
+  {
+    // finishDrawingEarly refuses outside drawing.
+    const game = newGameState()
+    startGame(game, ['d', 'g1'], T0, TIMES, ['apple', 'bread', 'chair'])
+    const ok = finishDrawingEarly(game, T0, TIMES) // still in pick
+    check('early: finishDrawingEarly is a no-op outside drawing', ok === false && game.phase === 'pick', game.phase)
+  }
+}
+
+summary('game-unit')

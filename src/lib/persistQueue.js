@@ -38,7 +38,7 @@ export function createPersistQueue({ getUserId }) {
       entry.attempts += 1
       if (entry.cancelled || isPermanent(error) || entry.attempts >= MAX_ATTEMPTS) {
         entries.delete(entry.stroke.id)
-        if (!entry.cancelled) console.error('[dabble] could not save stroke', error)
+        if (!entry.cancelled) console.error('[doodlescrap] could not save stroke', error)
       } else {
         schedule(entry, retryDelay(entry.attempts))
       }
