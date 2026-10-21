@@ -1,4 +1,4 @@
-# Dabble v2 room server. Real server; not the live app's frontend.
+# DoodleScrap v2 room server. Real server; not the live app's frontend.
 # Dev deploys as dabble-rooms-dev. The production environment below is a
 # definition only: never deploy it without the owner's explicit say-so, and
 # never put real production origins/secrets in this file (placeholders only).

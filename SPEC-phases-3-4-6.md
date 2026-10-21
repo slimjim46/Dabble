@@ -1,4 +1,4 @@
-# Dabble: spec for Phases 3, 4 and 6
+# DoodleScrap: spec for Phases 3, 4 and 6
 
 Read `AGENTS.md` first. Its rules apply to everything here.
 
@@ -232,7 +232,7 @@ On insert, in this order:
   `admin_ban_player(user_id, hide_strokes bool, reason)`, `admin_unban_player(user_id)`.
 - Admin UI at `/admin`, **lazy-loaded** so it adds nothing to the main bundle
   (`React.lazy` or a separate entry). It uses its **own Supabase client with a
-  different `auth.storageKey`** (for example `dabble-admin`) so signing in as admin never
+  different `auth.storageKey`** (for example `doodlescrap-admin`) so signing in as admin never
   replaces the visitor's anonymous session. Sign-in via email magic link.
   Features: list flagged strokes rendered on small canvases (reuse `drawStroke`),
   author name and report count, buttons Hide / Restore / Ban author (with confirm),

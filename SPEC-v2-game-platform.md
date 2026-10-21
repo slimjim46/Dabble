@@ -1,7 +1,7 @@
-# Dabble v2: Game Platform Spec
+# DoodleScrap v2: Game Platform Spec
 
 Rooms, game modes and a free-to-start architecture. Builds on v1 (the plaza).
-Source: "Dabble Game Platform Plan (v2)", October 2026.
+Source: "DoodleScrap Game Platform Plan (v2)", October 2026.
 
 ## How agents use this file
 

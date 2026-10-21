@@ -2,7 +2,7 @@
 // worker, printing every phase change, hint and reveal. Also asserts the
 // secret never reaches a non-drawer and the round is cleared between rounds.
 //
-//   ROOMS_ALLOWED_URL=https://dabble-rooms-dev.rowan-dev-workers.workers.dev \
+//   ROOMS_ALLOWED_URL=https://dabble-rooms-dev-fast.rowan-dev-workers.workers.dev \
 //     node tests/game-walkthrough.mjs
 //
 // Plain script (not *.test.mjs): run it by hand; it takes ~2 minutes.

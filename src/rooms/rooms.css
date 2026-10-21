@@ -1,6 +1,6 @@
 /* Rooms only. Imported lazily by RoomsApp, so nothing here is on the plaza's
    critical path, and everything reuses --ui-* from src/index.css so a room
-   looks like the rest of Dabble. */
+   looks like the rest of DoodleScrap. */
 
 /* ---- shell ---- */
 .room-screen {

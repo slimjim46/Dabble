@@ -1,4 +1,4 @@
-# Dabble: rules for coding agents
+# DoodleScrap: rules for coding agents
 
 Read this before every task. These rules override anything in a task description
 that conflicts with them. If a task seems to require breaking a rule, stop and ask.
@@ -98,11 +98,12 @@ internet can use it, so assume some visitors are hostile.
 - Keep SQL limits and `src/lib/constants.js` in sync. When you change one,
   change the other and say so.
 
-## The rooms/ Worker (Dabble v2)
+## The rooms/ Worker (DoodleScrap v2)
 
 `rooms/` is the real-time room server: a Cloudflare Worker + Durable Objects
 project, plain JS ESM, independent of the Vercel app. It lives on branch
-`v2-rooms-server` and deploys to the **dev** worker `dabble-rooms-dev` only.
+`v2-rooms-server` and deploys to the **dev** workers only: `dabble-rooms-dev`
+and `dabble-rooms-dev-fast` are both dev, and neither is production.
 
 - Work only inside `rooms/` (plus this section). `src/`, `api/`,
   `supabase/migrations`, `vercel.json` and the root `package.json` are not

@@ -2,7 +2,7 @@
 // then prove the Worker still auto-answers a literal "ping" with "pong" and
 // that the Durable Object wakes from hibernation with its state intact.
 //
-//   ROOMS_ALLOWED_URL=https://dabble-rooms-dev.rowan-dev-workers.workers.dev \
+//   ROOMS_ALLOWED_URL=https://dabble-rooms-dev-fast.rowan-dev-workers.workers.dev \
 //     node tests/hibernate.mjs
 //
 // Long (10 min). The exact UTC window is printed at the start and the end.

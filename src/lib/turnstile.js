@@ -139,7 +139,7 @@ export async function ensureCaptchaToken(siteKey, { doc, win, timeoutMs = TURNST
   try {
     const turnstile = await loadTurnstileScript(d, w, { timeoutMs })
     if (!turnstile) {
-      console.warn('[dabble] turnstile script unavailable — captcha skipped for a moment')
+      console.warn('[doodlescrap] turnstile script unavailable — captcha skipped for a moment')
       return giveUp()
     }
 
@@ -150,7 +150,7 @@ export async function ensureCaptchaToken(siteKey, { doc, win, timeoutMs = TURNST
     try {
       const token = await waitForToken(turnstile, container, { siteKey, timeoutMs })
       if (!token) {
-        console.warn('[dabble] captcha challenge did not yield a token')
+        console.warn('[doodlescrap] captcha challenge did not yield a token')
         return giveUp()
       }
       return token
@@ -159,7 +159,7 @@ export async function ensureCaptchaToken(siteKey, { doc, win, timeoutMs = TURNST
       else if (container.parentNode) container.parentNode.removeChild(container)
     }
   } catch {
-    console.warn('[dabble] captcha setup failed')
+    console.warn('[doodlescrap] captcha setup failed')
     return giveUp()
   }
 }

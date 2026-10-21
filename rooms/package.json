@@ -1,9 +1,9 @@
 {
-  "name": "dabble-rooms",
+  "name": "doodlescrap-rooms",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Dabble v2 game room server: Cloudflare Worker + Durable Objects",
+  "description": "DoodleScrap v2 game room server: Cloudflare Worker + Durable Objects",
   "scripts": {
     "deploy": "wrangler deploy",
     "deploy:dev": "wrangler deploy --env dev",

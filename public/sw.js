@@ -9,7 +9,7 @@
 //    fallback, so a deploy is visible on the next load.
 //  - only Vite's hashed /assets/* is cache-first: those names are content
 //    addressed, so the bytes behind a given URL can never change.
-const CACHE = 'dabble-shell-v2'
+const CACHE = 'doodlescrap-shell-v2'
 const SHELL_URL = '/index.html'
 
 self.addEventListener('install', (event) => {

@@ -1,7 +1,7 @@
 // Controlled load run against the dev worker. RUN AT MOST ONCE, LAST, and
 // only in a UTC window with no other dev usage.
 //
-//   ROOMS_ALLOWED_URL=https://dabble-rooms-dev.rowan-dev-workers.workers.dev \
+//   ROOMS_ALLOWED_URL=https://dabble-rooms-dev-fast.rowan-dev-workers.workers.dev \
 //     LOAD_CONFIRM=yes LOAD_LEDGER=rooms/tests/ledger.jsonl node tests/load.mjs
 //
 // Shape per room: 1 drawer (stroke @ DRAW_HZ) + (CLIENTS-1) watchers

@@ -62,7 +62,7 @@ async function hideWithRetry(id) {
       return true
     } catch (error) {
       if (/^(22|23|42)/.test(String(error?.code ?? ''))) {
-        console.error('[dabble] could not remove stroke', error)
+        console.error('[doodlescrap] could not remove stroke', error)
         return false
       }
       await sleep(1000 * 2 ** attempt)
@@ -385,7 +385,7 @@ export function useRealtimeCanvas({
         try {
           dispatch(event, payload)
         } catch (error) {
-          console.warn('[dabble] dropped bad broadcast', event, error)
+          console.warn('[doodlescrap] dropped bad broadcast', event, error)
         }
       }
       for (const event of BROADCAST_EVENTS) {
@@ -433,7 +433,7 @@ export function useRealtimeCanvas({
           store.addMany(result.strokes)
           return true
         } catch (error) {
-          if (!disposed) console.warn('[dabble] snapshot unavailable:', error?.message ?? error)
+          if (!disposed) console.warn('[doodlescrap] snapshot unavailable:', error?.message ?? error)
           return false
         }
       }
@@ -462,7 +462,7 @@ export function useRealtimeCanvas({
           await loadHistory()
           return true
         } catch (error) {
-          console.warn('[dabble] could not catch up with the canvas', error)
+          console.warn('[doodlescrap] could not catch up with the canvas', error)
           return false
         } finally {
           resyncing = false
@@ -485,7 +485,7 @@ export function useRealtimeCanvas({
             loaded = true
             break
           } catch (error) {
-            console.warn('[dabble] could not load strokes', error)
+            console.warn('[doodlescrap] could not load strokes', error)
             if (attempt < 4) await sleep(1500 * attempt)
           }
         }
@@ -496,7 +496,7 @@ export function useRealtimeCanvas({
           try {
             dispatch(event, payload)
           } catch (error) {
-            console.warn('[dabble] dropped bad broadcast', event, error)
+            console.warn('[doodlescrap] dropped bad broadcast', event, error)
           }
         }
         onVisualChange()
@@ -520,7 +520,7 @@ export function useRealtimeCanvas({
         } else if (state === 'CHANNEL_ERROR' || state === 'TIMED_OUT' || state === 'CLOSED') {
           s.subscribed = false
           setStatus('reconnecting')
-          if (error) console.warn('[dabble] realtime:', error.message ?? error)
+          if (error) console.warn('[doodlescrap] realtime:', error.message ?? error)
         }
       })
 

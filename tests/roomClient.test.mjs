@@ -1295,6 +1295,12 @@ function sourceCode(rel) {
     // the reveal frame drops the drawer's dangling live stroke. The plaza
     // never calls it (asserted below), so plaza behaviour is unchanged.
     'src/engine/strokeStore.js',
+    // Brand rename (Dabble -> DoodleScrap): a share-sheet title and the
+    // console log prefix. Strings only, no behaviour change: the share
+    // button still shares the same URL and the draw path is untouched
+    // (the clearLive check below still covers DrawingApp.jsx).
+    'src/components/DrawingApp.jsx',
+    'src/hooks/useRealtimeCanvas.js',
   ])
 
   let git = null

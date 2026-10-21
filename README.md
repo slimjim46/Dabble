@@ -1,4 +1,4 @@
-# Dabble
+# DoodleScrap
 
 A React app built with [Vite](https://vitejs.dev).
 
@@ -25,7 +25,8 @@ exercise sessions and heartbeats locally.
 
 Environment variables are read at deploy time (`.env.example` lists them all):
 
-- `VITE_SITE_URL` — the absolute site origin (e.g. `https://dabble.example`).
+- `VITE_SITE_URL` — the absolute site origin (e.g.
+  `https://doodlescrap.example`).
   Open Graph tags have to be absolute or every scraper drops them, so when this
   is missing the `og:image` / `twitter:image` tags are removed from the build
   rather than published pointing nowhere.
@@ -33,9 +34,10 @@ Environment variables are read at deploy time (`.env.example` lists them all):
   a public image, so it deliberately never touches the service-role key.
 - `VITE_TURNSTILE_SITE_KEY` — optional; turns on the bot check described under
   Privacy. Create the widget as **Invisible** in the Cloudflare dashboard.
-  Dabble renders it into an off-screen container with no room for a challenge
-  to appear and nothing for anyone to click, so a widget created as visible or
-  interactive would have nowhere to show itself and nobody to solve it.
+  DoodleScrap renders it into an off-screen container with no room for a
+  challenge to appear and nothing for anyone to click, so a widget created as
+  visible or interactive would have nowhere to show itself and nobody to solve
+  it.
 
 Clients cannot delete strokes, so test runs would fill the dev canvas with
 scribbles. The end-to-end suites therefore call the dev-only helper
@@ -44,8 +46,8 @@ hides whatever is visible and leaves the board clear.
 
 ## Privacy
 
-Dabble is anonymous by design. When you visit we create an anonymous account
-and store:
+DoodleScrap is anonymous by design. When you visit we create an anonymous
+account and store:
 
 - a `players` row (a random id, the display name you chose, and the country of
   your most recent visit),
@@ -60,7 +62,7 @@ strokes that enough people report are hidden from the canvas.
 
 When `VITE_TURNSTILE_SITE_KEY` is set, your browser contacts
 `challenges.cloudflare.com` for Cloudflare's bot check before we create the
-anonymous account; all Dabble ever sees is the token that check hands back.
+anonymous account; all DoodleScrap ever sees is the token that check hands back.
 
 ## Canvas snapshots
 

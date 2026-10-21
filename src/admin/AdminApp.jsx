@@ -7,7 +7,7 @@ import { rowToStroke } from '../lib/strokeCodec.js'
 // The admin tool is a separate page with its own Supabase client: its session
 // (a password-signed-in account, never anonymous) lives under a different
 // storage key and never touches the drawing session's storage.
-const ADMIN_STORAGE_KEY = 'dabble-admin'
+const ADMIN_STORAGE_KEY = 'doodlescrap-admin'
 const PAGE = 50
 
 function makeClient() {
@@ -240,7 +240,7 @@ export default function AdminApp() {
     return (
       <div className="admin-shell">
         <form className="admin-card" onSubmit={sendMagicLink}>
-          <h1>Dabble admin</h1>
+          <h1>DoodleScrap admin</h1>
           {sent ? (
             <p className="admin-muted">Check your inbox for the sign-in link.</p>
           ) : (
@@ -271,7 +271,7 @@ export default function AdminApp() {
     return (
       <div className="admin-shell">
         <div className="admin-card">
-          <h1>Dabble admin</h1>
+          <h1>DoodleScrap admin</h1>
           <p className="admin-muted">
             This account isn't an admin. Mark it in the dashboard (Auth → Users →
             Edit user → App metadata: <code>{`{"role": "admin"}`}</code>) and sign in again.
@@ -285,7 +285,7 @@ export default function AdminApp() {
   return (
     <div className="admin-shell">
       <header className="admin-header">
-        <h1>Dabble admin</h1>
+        <h1>DoodleScrap admin</h1>
         <nav className="admin-tabs">
           <button
             type="button"

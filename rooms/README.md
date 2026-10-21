@@ -1,6 +1,6 @@
-# dabble-rooms
+# DoodleScrap room server
 
-Real-time room server for Dabble v2: a Cloudflare Worker + Durable Objects
+Real-time room server for DoodleScrap v2: a Cloudflare Worker + Durable Objects
 project, plain JS ESM. It is independent of the Vercel app in `../src` and
 deploys to **dev** workers only (see the rooms section of `../AGENTS.md` for
 the rules that govern it).

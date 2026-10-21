@@ -52,7 +52,7 @@ export default function RoomsHome({ roomsUrl, onJoin }) {
   return (
     <div className="rooms-home">
       <div className="rooms-card">
-        <h1 className="rooms-title">Dabble Rooms</h1>
+        <h1 className="rooms-title">DoodleScrap Rooms</h1>
         <p className="rooms-sub">
           A private canvas for you and up to eleven others. Anyone with the code can join — rooms are not listed
           anywhere.

@@ -3,7 +3,7 @@
 // real DO/alarm can prove: hints, round clear, drawer grace/reconnect, too-few
 // abort, kick-a-drawer and the secret word never reaching a non-drawer.
 //
-//   ROOMS_ALLOWED_URL=https://dabble-rooms-dev.rowan-dev-workers.workers.dev \
+//   ROOMS_ALLOWED_URL=https://dabble-rooms-dev-fast.rowan-dev-workers.workers.dev \
 //     node tests/game-live.test.mjs
 import { anonUser, check, connect, createRoom, sleep, summary } from './helpers.mjs'
 

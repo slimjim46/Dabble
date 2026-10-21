@@ -33,12 +33,12 @@ function scriptsToBody(html) {
 function openGraphImage() {
   let siteUrl = ''
   return {
-    name: 'dabble:og-image',
+    name: 'doodlescrap:og-image',
     configResolved(config) {
       const raw = String(config.env?.VITE_SITE_URL ?? '').trim().replace(/\/+$/, '')
       siteUrl = /^https?:\/\//i.test(raw) ? raw : ''
       if (raw && !siteUrl) {
-        console.warn('[dabble] VITE_SITE_URL must be an absolute http(s) URL — og:image tags dropped')
+        console.warn('[doodlescrap] VITE_SITE_URL must be an absolute http(s) URL — og:image tags dropped')
       }
     },
     transformIndexHtml(html) {

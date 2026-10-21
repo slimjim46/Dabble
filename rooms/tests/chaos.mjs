@@ -1,6 +1,6 @@
 // Chaos suite: abuse the disconnect paths against the dev worker.
 //
-//   ROOMS_ALLOWED_URL=https://dabble-rooms-dev.rowan-dev-workers.workers.dev \
+//   ROOMS_ALLOWED_URL=https://dabble-rooms-dev-fast.rowan-dev-workers.workers.dev \
 //     node tests/chaos.mjs
 //
 // Run `wrangler tail --format json > tail-chaos.log` alongside this and check

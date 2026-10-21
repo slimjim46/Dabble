@@ -1,4 +1,4 @@
--- Dabble: strokes table + RLS. Safe to re-run. Compare with what you already have.
+-- DoodleScrap: strokes table + RLS. Safe to re-run. Compare with what you already have.
 -- Prerequisite: Authentication > Providers > "Allow anonymous sign-ins" must be ON.
 
 create table if not exists public.strokes (

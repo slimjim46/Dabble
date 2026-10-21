@@ -33,7 +33,7 @@ export default function RoomsApp() {
 
   useEffect(() => {
     const previous = document.title
-    document.title = route.name === 'room' ? `Dabble · ${route.code}` : 'Dabble Rooms'
+    document.title = route.name === 'room' ? `DoodleScrap · ${route.code}` : 'DoodleScrap Rooms'
     return () => {
       document.title = previous
     }

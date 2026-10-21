@@ -1,4 +1,4 @@
-// Dabble v2 room server (Worker side).
+// DoodleScrap v2 room server (Worker side).
 //
 // Routes:
 //   POST /rooms   authenticated room creation -> {code}

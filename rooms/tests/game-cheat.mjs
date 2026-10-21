@@ -2,7 +2,7 @@
 // actually send (bad picks, fake start, unknown secret types, post-grace
 // reconnect, kick, message flood) and check the server's edge behaviour.
 //
-//   ROOMS_ALLOWED_URL=https://dabble-rooms-dev.rowan-dev-workers.workers.dev \
+//   ROOMS_ALLOWED_URL=https://dabble-rooms-dev-fast.rowan-dev-workers.workers.dev \
 //     node tests/game-cheat.mjs
 import { anonUser, check, connect, createRoom, sleep, summary } from './helpers.mjs'
 
