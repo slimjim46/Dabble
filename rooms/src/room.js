@@ -78,6 +78,8 @@ export class Room {
     this.state = state
     this.env = env
     this.room = null // lazily loaded; lost on hibernation, reloaded
+    this.loading = null // the in-flight room load, shared by every caller
+    this.socketChains = new WeakMap() // ws -> tail of that socket's work
     // ALARM_DIAG (dev only): a cold start means the DO was evicted and
     // re-instantiated. If a late alarm coincides with a do_start just before
     // it, the lateness is a platform wake, not a wrong stored deadline.
@@ -106,14 +108,40 @@ export class Room {
     return Number.isFinite(n) && n >= 0 ? n : SEAT_HOLD_MS
   }
 
+  /**
+   * The room state, loaded once.
+   *
+   * Two handlers that find the room unloaded would each read it from storage
+   * and each get their OWN copy: they would then mutate different rooms and
+   * the last save would win, silently dropping the other handler's changes
+   * (a round sequence number claimed twice, a phase deadline, a drawer
+   * grace). One in-flight load is shared by every caller instead, so there is
+   * only ever one room in memory.
+   */
   async load() {
     if (this.room === null) {
-      this.room = (await this.state.storage.get('room')) || null
-      // Rooms created before v2 Phase 3 (or before step 2) get their missing
-      // game fields backfilled in memory; the next save() persists them.
-      if (this.room) this.room.game = upgradeGameState(this.room.game)
+      if (!this.loading) {
+        this.loading = this.state.storage.get('room').then((v) => {
+          const room = v || null
+          // Rooms created before v2 Phase 3 (or before step 2) get their missing
+          // game fields backfilled in memory; the next save() persists them.
+          if (room) room.game = upgradeGameState(room.game)
+          return room
+        })
+        // A failed read must not poison the next load.
+        this.loading.catch(() => {
+          this.loading = null
+        })
+      }
+      this.room = await this.loading
     }
     return this.room
+  }
+
+  /** The room is gone (expired or deleted): the next load reads it again. */
+  invalidateRoom() {
+    this.room = null
+    this.loading = null
   }
 
   async save() {
@@ -347,7 +375,7 @@ export class Room {
       }
       logEvent('room_expired')
       await this.state.storage.deleteAll()
-      this.room = null
+      this.invalidateRoom()
       return
     }
 
@@ -402,7 +430,7 @@ export class Room {
     ) {
       logEvent('room_grace_expired')
       await this.state.storage.deleteAll()
-      this.room = null
+      this.invalidateRoom()
       return
     }
 
@@ -600,7 +628,34 @@ export class Room {
 
   // ---- Messages ----------------------------------------------------------
 
+  /**
+   * Run one unit of work for a socket after everything already queued for
+   * that socket has finished.
+   *
+   * The message handler reads the connection attachment, awaits the room
+   * load and writes the attachment back. If a second message of the SAME
+   * socket were handled while the first was still suspended on that read,
+   * the second handler would still hold the attachment copy it read BEFORE
+   * the first handler wrote the open-stroke slot: the ownership check would
+   * find no open stroke, reject the frame as a stroke_ownership violation,
+   * and the stroke would be neither relayed nor stored — a stroke that
+   * vanishes with no error on the socket. The chain makes the order of one
+   * socket's messages explicit instead of leaving it to event delivery.
+   */
+  enqueue(ws, fn) {
+    const prev = this.socketChains.get(ws) ?? Promise.resolve()
+    // then(fn, fn): a failed link must not poison the queue for the next
+    // message of this socket.
+    const next = prev.then(fn, fn)
+    this.socketChains.set(ws, next)
+    return next
+  }
+
   async webSocketMessage(ws, message) {
+    await this.enqueue(ws, () => this.handleMessage(ws, message))
+  }
+
+  async handleMessage(ws, message) {
     const att = ws.deserializeAttachment()
     if (!att) {
       ws.close(CLOSE_POLICY, 'no attachment')
@@ -1180,6 +1235,14 @@ export class Room {
   // ---- Disconnect --------------------------------------------------------
 
   async webSocketClose(ws) {
+    await this.enqueue(ws, () => this.handleSocketClose(ws))
+  }
+
+  async webSocketError(ws) {
+    await this.enqueue(ws, () => this.handleSocketError(ws))
+  }
+
+  async handleSocketClose(ws) {
     await this.handleDisconnect(ws)
     // Complete the close handshake: when the CLIENT initiates the close,
     // workerd waits for the DO to close the hibernation socket before the
@@ -1189,7 +1252,7 @@ export class Room {
     } catch {}
   }
 
-  async webSocketError(ws) {
+  async handleSocketError(ws) {
     await this.handleDisconnect(ws)
   }
 

@@ -722,13 +722,17 @@ import {
 //
 //    The room is warmed before the measured strokes. A Durable Object loads
 //    its room state on the first message it handles, and the load is an
-//    await: a socket's stroke_start and its stroke_end must not straddle
-//    it. If they do, the stroke_end handler reads the attachment from
-//    before the stroke_start was written, finds no open stroke, and
-//    rejects the frame as a stroke_ownership violation — the stroke is
-//    then neither relayed nor stored, and the room's cap is never
-//    reached. A cursor frame is relayed but never stored, so the warm-up
-//    costs the round nothing: seeing it proves the room is loaded.
+//    await. A socket's stroke_start and its stroke_end must not straddle
+//    it: if they did, the stroke_end handler would read the attachment
+//    from before the stroke_start was written, find no open stroke and
+//    reject the frame as a stroke_ownership violation — the stroke would
+//    then be neither relayed nor stored, and the room's cap would never be
+//    reached. The server now serialises one socket's messages (the
+//    per-socket chain in src/room.js), so the straddle cannot happen; the
+//    warm-up stays as an explicit precondition check instead of a
+//    workaround: a cold room now shows up as this named failure rather
+//    than as a silently lost stroke. A cursor frame is relayed but never
+//    stored, so the warm-up costs the round nothing.
 {
   const host = await anonUser()
   const { body } = await createRoom(host.token)
