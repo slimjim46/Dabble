@@ -157,3 +157,9 @@ and `dabble-rooms-dev-fast` are both dev, and neither is production.
    you were unsure about, and anything the owner must do manually (dashboard
    settings, env vars, secrets).
 5. Nothing applied to production.
+
+## Handoff (end of every task)
+Before finishing any task: (1) overwrite docs/HANDOFF.md with the template sections filled
+in factually and briefly (no secrets, tokens, IPs or user data); (2) run `npm run handoff`.
+The handoff is part of the Definition of done. Never edit the Status table in
+SPEC-v2-game-platform.md; report discrepancies in the handoff instead.

@@ -15,3 +15,4 @@ blocked-terms.txt
 *:Zone.Identifier
 repomix-output*.xml
 opencode.json
+claude-context/
