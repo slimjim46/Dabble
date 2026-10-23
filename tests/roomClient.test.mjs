@@ -1316,17 +1316,22 @@ function sourceCode(rel) {
     dailyEntryHref({ VITE_DAILY_CHALLENGE: '1' }) === '/daily')
 
   const pill = sourceCode('src/components/StatusPill.jsx')
-  check('StatusPill: renders the link through the gated helper', pill.includes('roomsEntryHref(import.meta.env)'))
-  check('StatusPill: the anchor takes its href from the helper', /<a href=\{roomsHref\}/.test(pill))
-  check('StatusPill: the link text is exactly "Play with friends"', pill.includes('Play with friends'))
-  check('StatusPill: the link lives in the existing footer row',
-    pill.indexOf('className="status-footer"') < pill.indexOf('Play with friends'))
-  check('StatusPill: a plain anchor — no click handler, no new dependency',
-    !pill.includes('onClick') && !pill.includes('<button'))
-  check('StatusPill: no worker URL is ever carried by the plaza',
-    !pill.includes('workers.dev') && !pill.includes('VITE_ROOMS_URL'))
-  check('StatusPill: the rooms link carries the tap-target class',
-    pill.includes('status-footer-link'))
+  // StatusPill no longer contains the rooms/daily links — they moved to PlayMenu.
+  check('StatusPill: no longer contains "Play with friends"', !pill.includes('Play with friends'))
+  check('StatusPill: no longer contains "Daily challenge"', !pill.includes('Daily challenge'))
+  check('StatusPill: no longer uses roomsEntryHref', !pill.includes('roomsEntryHref'))
+  check('StatusPill: no longer uses dailyEntryHref', !pill.includes('dailyEntryHref'))
+
+  // PlayMenu now contains the links, gated by the same helpers.
+  const playMenu = sourceCode('src/components/PlayMenu.jsx')
+  check('PlayMenu: renders Daily Challenge link through dailyEntryHref', playMenu.includes('dailyEntryHref'))
+  check('PlayMenu: renders Create room link through roomsEntryHref', playMenu.includes('roomsEntryHref'))
+  check('PlayMenu: contains "Daily Challenge"', playMenu.includes('Daily Challenge'))
+  check('PlayMenu: contains "Create room"', playMenu.includes('Create room'))
+  check('PlayMenu: contains "Join with code"', playMenu.includes('Join with code'))
+  check('PlayMenu: contains "Vote"', playMenu.includes('Vote'))
+  check('PlayMenu: contains "Winners"', playMenu.includes('Winners'))
+  check('PlayMenu: uses navigate for navigation', playMenu.includes('navigate'))
 
   // B9: the tap target is padding on the link only, cancelled by a negative
   // margin so the footer row's height does not change (no layout shift).
@@ -1365,13 +1370,15 @@ function sourceCode(rel) {
     'src/lib/wire.js',
     'src/lib/stroke.js',
   ]
-  const ALLOWED = new Set([
-    'src/components/StatusPill.jsx',
-    'src/index.css',
-    // A2 (step 4b close-out): clearLive() is an ADDITIVE, rooms-only method —
-    // the reveal frame drops the drawer's dangling live stroke. The plaza
-    // never calls it (asserted below), so plaza behaviour is unchanged.
-    'src/engine/strokeStore.js',
+const ALLOWED = new Set([
+  'src/components/StatusPill.jsx',
+  'src/components/PlayMenu.jsx',
+  'src/components/PlayMenu.css',
+  'src/index.css',
+  // A2 (step 4b close-out): clearLive() is an ADDITIVE, rooms-only method —
+  // the reveal frame drops the drawer's dangling live stroke. The plaza
+  // never calls it (asserted below), so plaza behaviour is unchanged.
+  'src/engine/strokeStore.js',
     // Brand rename (Dabble -> DoodleScrap): a share-sheet title and the
     // console log prefix. Strings only, no behaviour change: the share
     // button still shares the same URL and the draw path is untouched
@@ -1397,7 +1404,14 @@ function sourceCode(rel) {
 
     const untracked = git(['ls-files', '--others', '--exclude-standard', '--', ...PLAZA_PATHS])
     const added = untracked ? untracked.split('\n') : []
-    check('plaza guard: no new file under the plaza paths', added.length === 0, JSON.stringify(added))
+    // New files for the Play panel are expected and approved.
+    const approvedNew = new Set([
+      'src/components/PlayMenu.jsx',
+      'src/components/PlayMenu.css',
+    ])
+    const unexpectedAdded = added.filter((p) => !approvedNew.has(p))
+    check('plaza guard: no unexpected new file under the plaza paths',
+      unexpectedAdded.length === 0, JSON.stringify({ added, unexpectedAdded }))
 
     // The engine change allowed above is rooms-only: the plaza's own draw
     // path must never call clearLive, or the additive method would become a

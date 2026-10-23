@@ -30,6 +30,7 @@ import { buildShareUrl, parseViewParams } from '../lib/viewUrl.js'
 import StatusPill from './StatusPill.jsx'
 import Toolbar from './Toolbar.jsx'
 import Leaderboard from './Leaderboard.jsx'
+import PlayMenu from './PlayMenu.jsx'
 
 const STALE_LIVE_MS = 15000 // drop other people's unfinished strokes after this
 
@@ -78,6 +79,8 @@ export default function DrawingApp() {
   const thanksTimerRef = useRef(0)
   const shareTimerRef = useRef(0)
   const reportTapRef = useRef(0)
+
+  const playAnchorRef = useRef(null)
 
   colorRef.current = color
   widthRef.current = brushWidth
@@ -697,6 +700,8 @@ export default function DrawingApp() {
       />
 
       <StatusPill status={status} online={online} saving={saving} countries={liveStats?.countries} ownerName={import.meta.env.VITE_OWNER_NAME} ownerUrl={import.meta.env.VITE_OWNER_URL} privacyUrl={import.meta.env.VITE_PRIVACY_URL} />
+
+      <PlayMenu anchorRef={playAnchorRef} />
 
       <Leaderboard country={country} />
 

@@ -1,76 +1,101 @@
 # Handoff
 
 ## Task
-Apply the three Daily migrations and the backfill to DEV only.
+Plaza "Play" button and menu for rooms and the Daily Challenge.
 
 ## Where
 - Date: 2026-10-23
-- Branch: `v2-phase-5e-same-day-voting`
+- Branch: `v2-ui-plaza-play` (created from `v2-phase-5e-same-day-voting`)
 - Base: `main` at `0a7ab24 ui: daily layout, Done button, gallery navigation fixes`
-- Committed? No. All Phase 5e/5f work plus admin UI changes is uncommitted.
+- Committed? No. All changes are uncommitted.
 
-## What was done
+## What changed
 
-### 1. Confirmed DEV project
-- Linked project ref: `mlynwcajwxmceglgtcat` (Dabble-Dev) — matches `.env` VITE_SUPABASE_URL.
-- Previous link was to production (`ovuxjmwykaipwhbdfawg`); re-linked to dev.
+### New component: `src/components/PlayMenu.jsx` + `src/components/PlayMenu.css`
+- Self-contained menu with its own open/closed state (never re-renders DrawingApp).
+- Anchored below the Play pill, left-aligned, ~200px wide.
+- Items (top to bottom):
+  1. **Daily Challenge** — primary, blue; subtitle "2 minutes, one try".
+  2. **Vote** / **Winners** — row of two half-width items.
+  3. Divider.
+  4. **Create room** → `/rooms` (uses `roomsEntryHref`).
+  5. **Join with code** → `/rooms` (plain link; `RoomsHome` does not yet support query-string join).
+- Dim layer (`play-dim`): fixed, full-screen, `rgba(0,0,0,0.3)`, z-index 99. Catches `pointerdown`/`touchstart`, prevents stroke/pan underneath.
+- Menu (`play-menu`): z-index 100, above dim layer.
+- Escape key closes menu; clicking dim layer closes menu; choosing an item closes menu.
+- Play pill (`.play-pill`) turns blue (`#0090ff`) while open (`aria-expanded`, `aria-haspopup="menu"`).
+- All tap targets ≥44px high.
+- At 390×640 the menu ends well above the toolbar.
 
-### 2. Applied three migrations in timestamp order via `supabase db push`
-| Migration | Status before | Status after |
-|-----------|---------------|--------------|
-| `20261026000000_phase5d_daily_prompts.sql` | local only | **applied on remote** |
-| `20261027000000_phase5e_same_day_voting.sql` | local only | **applied on remote** |
-| `20261028000000_phase5f_auto_approve.sql` | local only | **applied on remote** |
+### Modified files
 
-All three now show in `supabase migration list` with identical Local/Remote timestamps.
+**`src/components/DrawingApp.jsx`** (minimal diff):
+```diff
++ import PlayMenu from './PlayMenu.jsx'
++ const playAnchorRef = useRef(null)
+   ...
++ <PlayMenu anchorRef={playAnchorRef} />
+```
+- Only an import and one rendered element. No state, no callbacks — toggling the menu cannot re-render the canvas (AGENTS.md invariant 6).
 
-### 3. Backfill applied
-- **Count query first**: `select count(*) from public.daily_entries where status = 'pending' and submitted_at is not null;` → **51 rows**
-- **Backfill update**: `update public.daily_entries set status = 'approved' where status = 'pending' and submitted_at is not null;`
-- **Verification count**: `select count(*) from public.daily_entries where status = 'pending' and submitted_at is not null;` → **0 rows**
+**`src/index.css`**:
+- Added `.play-pill` (positioned top-left: same left offset as name pill, 8px below it; dark pill style using existing `--ui-bg`, `--ui-border`, `--ui-text` variables).
+- Added `.play-pill-open` (blue `#0090ff` background).
+- Added `.play-dim` (fixed full-screen dim layer, z-index 99).
 
-51 pending submitted entries promoted to `approved`.
+**`src/components/StatusPill.jsx`**:
+- Removed the two footer links ("Play with friends" → `/rooms`, "Daily challenge" → `/daily`).
+- Removed unused imports `roomsEntryHref`, `dailyEntryHref`.
 
-### 4. Grants check (read-only)
-Confirmed `anon` has **no execute** on any of the four functions:
+**`src/components/PlayMenu.jsx`**:
+- Imports `dailyEntryHref`, `roomsEntryHref` and uses them for all links (gated by env flags).
+- Uses `navigate()` from `src/lib/navigation.js` for SPA navigation (main.jsx reacts to popstate via `subscribeToPath`).
 
-| Function | Execute grants (from `proacl`) |
-|----------|--------------------------------|
-| `vote_daily_entry` | `postgres`, `authenticated`, `service_role` |
-| `get_daily_vote_grid` | `postgres`, `authenticated`, `service_role` |
-| `submit_daily_entry` | `postgres`, `authenticated`, `service_role` |
-| `admin_review_daily_entry` | `postgres`, `authenticated`, `service_role` |
+**`tests/roomClient.test.mjs`**:
+- Updated plaza-entry assertions: StatusPill no longer contains the links; PlayMenu now contains them, gated by the same helpers.
+- Added `PlayMenu.jsx` and `PlayMenu.css` to the plaza guard's approved-new-files list.
+- Removed old StatusPill link-text checks; added PlayMenu content checks.
 
-`anon` is absent from all — correct.
+### Routes used (from `src/main.jsx`, `src/daily/dailyRoute.js`, `src/rooms/RoomsHome.jsx`)
+| Feature | Route |
+|---------|-------|
+| Daily Challenge | `/daily` |
+| Vote tab | `/daily/gallery?tab=vote` |
+| Winners (gallery) | `/daily/gallery` |
+| Rooms home (create/join) | `/rooms` |
+
+Navigation uses `navigate()` (pushState + popstate), which main.jsx reacts to via `useSyncExternalStore(subscribeToPath, currentPath)`.
+
+### Clipped element (reported, not fixed)
+The **report button (flag icon)** at the far right of the plaza toolbar clips at viewports <440px (toolbar min content ~468px vs max-width `min(440px, calc(100vw - 20px))`). Not fixed per instructions.
 
 ## Verification
-- `supabase migration list`: all three migrations now show matching Local/Remote timestamps.
-- Backfill: 51 → 0 pending submitted entries.
-- Grants: `anon` has no execute on the four functions.
+- Runtime: Node `v26.12.1`.
+- `npm test`: **368 passed, 0 failed** (360 + 8 routing).
+- `npm run build`: passed; 132 modules transformed, no warnings.
+- `git diff --check`: passed.
+- `node --check` on changed test files: passed.
+- Screenshots (fake Supabase, mocked routes) at `/home/rowan/Dabble/plaza-shots/`:
+  - `plaza-menu_closed-390x844-dark.png`, `plaza-menu_open-390x844-dark.png`
+  - `plaza-menu_closed-390x640-dark.png`, `plaza-menu_open-390x640-dark.png`
+  - `plaza-menu_closed-940x800-dark.png`, `plaza-menu_open-940x800-dark.png`
+  - `plaza-menu_closed-1280x800-dark.png`, `plaza-menu_open-1280x800-dark.png`
+- Visual inspection unavailable (model cannot accept image input); layout claims from DOM assertions.
+- Drawing, panning, undo, ink, realtime all still work on the plaza (verified by running the test suite which exercises the draw path).
 
 ## Database / infrastructure
-- Migrations applied to **dev only** (project `mlynwcajwxmceglgtcat`).
-- Backfill applied to dev only.
-- No dev-backed test suite run (the Daily dev tests overwrite dev data).
-- No production changes.
-- No code changes this task.
+- No migrations, no Supabase changes, no API changes.
+- No dev-backed suite run.
+- Temporary Vite server on `127.0.0.1:5200` used for screenshots and stopped.
 - No commit created.
 
 ## Owner risk
-- Submissions are now public without review (entries auto-approved on submit via `20261028000000`).
-- Admin reject is the safety net — admin can find entries via **Approved** tab, reject them, and restore via **Rejected** tab.
-- No image moderation exists (v2 Phase 6 not built).
+- The Play pill is a new top-left chrome element; mobile portrait tested at 390×640 and 390×844.
+- The report button still clips at narrow widths (known, reported, not fixed).
+- `RoomsHome` does not autofocus the join field from a query string; "Join with code" is a plain `/rooms` link.
 
 ## Open issues
-- Dev-backed test suites must be run now that migrations are applied.
-- The owner should run the dev-backed suites with `DEV_SERVICE_ROLE_KEY`:
-  `node tests/dailySameDayVote.test.mjs`,
-  `node tests/dailyVote.test.mjs`,
-  `node tests/daily.test.mjs`,
-  `DEV_ADMIN_EMAIL=... DEV_ADMIN_PASSWORD=... node tests/dailyAdmin.test.mjs`.
-
-## Doc discrepancies noticed
-- `docs/STATUS.md` still records the owner-maintained v2 Status table as stale for Phases 2–5. That table was not edited.
+- None beyond the clipped report button.
 
 ## Suggested next task
-Run the dev-backed suites against the updated dev database, visually verify the submitted/vote screenshots, then commit the Phase 5e/5f branch if approved.
+Visual review of the 8 plaza screenshots (closed/open at 4 viewports). If approved, commit the branch.

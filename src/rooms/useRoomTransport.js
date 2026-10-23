@@ -72,6 +72,7 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
   const visualRef = useRef(onVisualChange)
   visualRef.current = onVisualChange
   const notify = useCallback(() => visualRef.current?.(), [])
+  const prevPhaseRef = useRef(null)
 
   const conn = useRef(null)
   if (!conn.current) {
@@ -125,6 +126,7 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
           setReveal(null)
           setGuessAck(null)
           setGuessNotice(null)
+          prevPhaseRef.current = null
           break
         }
 
@@ -267,9 +269,21 @@ export function useRoomTransport({ roomsUrl, code, store, cursors, onVisualChang
         // The public state frame is the clock: remainingMs + a local monotonic
         // stamp. `state` arrives on every phase change (and periodically while
         // drawing), so the header countdown resyncs on each one.
-        case 'state':
+        case 'state': {
+          const phase = frame.data.phase
+          const prev = prevPhaseRef.current
+          // The server wipes the old round when a new one starts (lobby/scores/game_over -> pick)
+          // and when a game ends (-> lobby), but never tells connected clients. Do it here.
+          const newRound = phase === 'pick' && prev !== null && prev !== 'pick'
+          const backToLobby = phase === 'lobby' && prev !== null && prev !== 'lobby'
+          if (newRound || backToLobby) {
+            for (const stroke of [...store.values()]) store.remove(stroke.id)
+            store.clearLive()
+          }
+          prevPhaseRef.current = phase
           setGame({ ...frame.data, at: performance.now(), atWall: Date.now() })
           break
+        }
 
         // Drawer-only frames. A non-drawer never receives these; a stale one
         // from a previous round is ignored by the screen (round is checked).
