@@ -1,60 +1,92 @@
 # Handoff
 
 ## Task
-Create a clean handoff-workflow branch from `main`, keeping the existing
-`chore-handoff-workflow` branch unchanged.
+Fix Daily Challenge gallery navigation: Gallery must render the gallery without
+a reload, the gallery Back button and browser Back must return to Daily, and a
+direct `/daily/gallery` load must be styled and usable.
 
 ## Where
-- Date: 2026-10-22
-- Branch: `chore-handoff-clean`
-- Last commit: `21aa09a Merge branch v2-phase-5-daily`
-- Committed? No. The selected docs/workflow changes are staged; shared-file
-  merges and the task handoff edits are unstaged. Generated `claude-context/`
-  remains ignored and uncommitted.
+- Date: 2026-10-23
+- Branch: `v2-ui-daily-screens`
+- Last commit: `0d459a8 docs: handoff workflow, status and rules cleanup`
+- Committed? No. This task is uncommitted alongside the earlier uncommitted
+  Daily UI corrections in `DailyScreen.jsx`, `DailyPaper.jsx` and `daily.css`.
 
 ## What changed
-- Brought over the Claude read-first guide, handoff builder, status/decision/v1
-  docs, room-specific rules, and v1 archive. The archived spec is the current
-  `main` version, preserving its text while relocating it.
-- Added only the handoff script entry to `package.json`; no lockfile or
-  dependency changes. Added `claude-context/` to `.gitignore` and appended the
-  handoff rule to the existing root `AGENTS.md`.
-- Updated `docs/STATUS.md` to say v2 Phases 2–5 are merged into `main`, and
-  reconciled rooms guidance with the current two-worker dev setup.
+- `src/main.jsx`: route selection now subscribes to `popstate` via
+  `useSyncExternalStore`. Previously `window.location.pathname` was read once
+  at module load, so Gallery/Back only changed the URL.
+- `src/lib/navigation.js` (new): shared `currentPath`, `navigate` and
+  `subscribeToPath` helpers. `navigate` keeps the existing
+  `pushState` + `popstate` behaviour.
+- `src/daily/dailyRoute.js` (new): `DAILY_PATH`, `DAILY_GALLERY_PATH` and
+  `dailyView` used by both `main.jsx` and the test.
+- `src/daily/DailyScreen.jsx`: Gallery and leave buttons use the shared
+  `navigate` helper and route constants. Timer, submit, voting, one-try logic,
+  recenter and Done placement were not changed by this task.
+- `src/daily/DailyGallery.jsx`: Back uses `navigate(DAILY_PATH)` and the file
+  imports `daily.css`, so a direct `/daily/gallery` load is styled. Previously
+  only `DailyApp.jsx` imported that CSS.
+- `tests/dailyClient.test.mjs`: added six routing/history checks and a
+  `--routing-only` mode that runs before the Supabase env requirement.
+- `package.json`: `npm test` now includes the routing-only test.
+- `vercel.json`: unchanged; `/daily` and `/daily/:path*` already rewrite to
+  `index.html`, covering `/daily/gallery`.
+- No rooms/plaza/admin code, migration, API, or Done layout was changed.
 
 ## Verification
-- `npm test` — passed; all suites passed (final room-client output:
-  `363 passed, 0 failed`).
-- `npm run build` — passed; Vite transformed 128 modules.
-- `npm run handoff` — passed; generated `00-READ-FIRST.md` through
-  `04-last-handoff.md` (about 9,780 tokens total).
-- `git diff --check` and package JSON parsing — passed.
-- Runtime: Node `v26.12.1` from the already-present `node_modules/node/bin/node`;
-  no Node dependency or lockfile entry was added. `npm run test:dev` was not run.
-- Read-only dev migration list: `20261023000000`, `20261024000000`, and
-  `20261025000000` are applied; `20261026000000` is local only. No migration was
-  applied during this task.
+- Runtime: Node `v22.23.4`.
+- New test before the fix: failed with `ERR_MODULE_NOT_FOUND` for the new
+  routing modules.
+- After the fix: `node tests/dailyClient.test.mjs --routing-only` passed
+  (`6 passed, 0 failed`).
+- `npm test`: passed; existing `363 passed, 0 failed` plus the new
+  `6 passed, 0 failed`.
+- `npm run build`: passed; Vite transformed 130 modules with no warnings.
+- `git diff --check`: passed.
+- External Playwright harness: `/tmp/opencode/ui-shots/capture.mjs`, fake
+  Supabase only (`127.0.0.1:54321`, `fake-anon-key`); non-fake external requests
+  were blocked.
+- Harness checks passed:
+  - Direct `/daily/gallery` loaded with `.daily-gallery` computed
+    `position: absolute`, proving `daily.css` was present.
+  - `390x844`: top chrome bottom `51`, first winner top `60` (`9px` clear);
+    Back button `left 316.4375`, `top 10`, `right 378`, `bottom 43`; no
+    horizontal overflow.
+  - `1280x800`: top chrome bottom `46`, first winner top `60` (`14px` clear);
+    Back button `left 1206.4375`, `top 11.5`, `right 1268`, `bottom 44.5`.
+  - Empty state rendered centred; no horizontal overflow at either size.
+  - Gallery Back returned to `/daily`; Gallery button then rendered
+    `/daily/gallery`; `history.back()` returned to `/daily`.
+- Screenshots:
+  `/tmp/opencode/ui-shots/view/gallery-after/gallery-390x844-dark.png`,
+  `gallery-1280x800-dark.png`,
+  `gallery_empty-390x844-dark.png`,
+  `gallery_empty-1280x800-dark.png`.
+- Visual inspection was not possible: this model cannot accept image input.
+  The layout claims above come from Playwright DOM/geometry assertions and
+  computed styles, not from viewing the images.
 
 ## Database / infrastructure
-- Migrations applied to dev by this task: none.
-- New or changed policies, security definer functions, grants/revokes: none.
-- Worker deploys: none. Nothing was applied to production.
+- Migrations applied: none. No policies, functions, grants/revokes, or
+  environment settings changed. Nothing applied to production.
+- `vercel.json` was inspected, not edited. No deployment was performed.
+- The temporary Vite server was stopped after the harness run.
 
 ## Open issues
-- The owner-maintained v2 Status table still says Phase 2 is next and Phases
-  3–10 are not started. It was not edited.
-- The backup branch contains unrelated committed screenshots, a captured diff
-  at root `testing`, a dev helper SQL file, and a `node` app dependency; none
-  was brought into this branch.
+- No image-based visual review was possible in this session.
+- The screenshot harness and images are under `/tmp/opencode/ui-shots/`, not in
+  git.
+- The earlier wide-screen issue remains: at `940x800`/`1280x800` the drawing
+  paper bottom can sit behind the toolbar. It is outside this task.
 
 ## Owner must do manually
-Review and merge `chore-handoff-clean` when ready. The owner may update the v2
-Status table separately. No dashboard or environment changes are required.
+None.
 
 ## Doc discrepancies noticed
-`docs/STATUS.md` now records v2 Phases 2–5 as merged, while the spec Status
-table remains behind. The spec table is unchanged.
+- `docs/STATUS.md` still records the owner-maintained table as stale for v2
+  Phases 2–5. That table was not edited.
 
 ## Suggested next task
-Review and merge `chore-handoff-clean` into `main`. The v2 implementation
-branches are already merged, so no additional phase-branch merge order is needed.
+Review the gallery screenshots visually, then continue the remaining Daily
+screen work or commit the branch when ready.

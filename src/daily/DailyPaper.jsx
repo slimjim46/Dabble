@@ -2,7 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPaperCache } from '../engine/paperCache.js'
 import {
   MAX_LIVE_POINTS,
+  MAX_SCALE,
   MIN_SCALE,
+  MIN_VISIBLE,
   PAPER_SIZE,
   POINT_MIN_DIST_SCREEN,
   SIMPLIFY_EPSILON_SCREEN,
@@ -25,13 +27,12 @@ function clamp(value, min, max) {
 
 /**
  * The daily canvas: the same engine as the plaza (stroke store -> cached paper
- * -> live stroke) with a fixed, no-pan/no-zoom view, reused from RoomPaper. It
- * is single-player, so there is no socket and no cursor overlay: strokes are
- * committed locally and the screen reads them for submit. Ink is a FIXED
- * budget (no refill) and drains as you draw; when `disabled` (paper full) it
- * refuses new strokes.
+ * -> live stroke) with the plaza's pan/zoom gestures. It is single-player, so
+ * there is no socket and no cursor overlay: strokes are committed locally and
+ * the screen reads them for submit. Ink is a FIXED budget (no refill) and
+ * drains as you draw; when `disabled` (paper full) it refuses new strokes.
  */
-export default function DailyPaper({ store, onCommit, disabled, redrawRef }) {
+export default function DailyPaper({ store, onCommit, disabled, redrawRef, recenterRef }) {
   const canvasRef = useRef(null)
   const wrapRef = useRef(null)
   const paperRef = useRef(null)
@@ -44,8 +45,10 @@ export default function DailyPaper({ store, onCommit, disabled, redrawRef }) {
 
   const viewRef = useRef({ x: 0, y: 0, scale: 1 })
   const liveStrokeRef = useRef(null)
-  const activeRef = useRef(new Set())
-  const drawingRef = useRef(null)
+  const liveStrokeCostRef = useRef(0)
+  const pointersRef = useRef(new Map())
+  const gestureRef = useRef(null)
+  const panKeyRef = useRef(false)
   const rafRef = useRef(0)
   const drawRef = useRef(() => {})
   const inkRef = useRef(DAILY_INK_BUDGET)
@@ -127,31 +130,59 @@ export default function DailyPaper({ store, onCommit, disabled, redrawRef }) {
     if (!wrap) return
     const rect = wrap.getBoundingClientRect()
     const pad = 24
+    const chrome = wrap.closest('.daily-screen')?.querySelector('.daily-top')
+    const chromeBottom = chrome ? Math.max(0, chrome.getBoundingClientRect().bottom - rect.top) : 0
+    const topPad = Math.max(pad, chromeBottom + 8)
+    const usableHeight = rect.height - topPad - pad
     const scale = clamp(
-      Math.min((rect.width - pad * 2) / PAPER_SIZE, (rect.height - pad * 2) / PAPER_SIZE),
+      Math.min((rect.width - pad * 2) / PAPER_SIZE, usableHeight / PAPER_SIZE),
       MIN_SCALE,
       1,
     )
+    const paperSize = PAPER_SIZE * scale
     viewRef.current = {
       scale,
-      x: (rect.width - PAPER_SIZE * scale) / 2,
-      y: (rect.height - PAPER_SIZE * scale) / 2,
+      x: (rect.width - paperSize) / 2,
+      y: topPad + Math.max(0, (usableHeight - paperSize) / 2),
     }
     scheduleDraw()
   }, [scheduleDraw])
+
+  useEffect(() => {
+    if (!recenterRef) return undefined
+    recenterRef.current = centerView
+    return () => {
+      recenterRef.current = () => {}
+    }
+  }, [centerView, recenterRef])
 
   useEffect(() => {
     resizeCanvas()
     centerView()
     const wrap = wrapRef.current
     if (!wrap) return undefined
-    const observer = new ResizeObserver(() => {
-      resizeCanvas()
-      centerView()
-    })
+    const observer = new ResizeObserver(resizeCanvas)
     observer.observe(wrap)
     return () => observer.disconnect()
   }, [resizeCanvas, centerView])
+
+  useEffect(() => {
+    const down = (event) => {
+      if (event.code === 'Space' && event.target === document.body) {
+        panKeyRef.current = true
+        event.preventDefault()
+      }
+    }
+    const up = (event) => {
+      if (event.code === 'Space') panKeyRef.current = false
+    }
+    window.addEventListener('keydown', down)
+    window.addEventListener('keyup', up)
+    return () => {
+      window.removeEventListener('keydown', down)
+      window.removeEventListener('keyup', up)
+    }
+  }, [])
 
   useEffect(
     () => () => {
@@ -206,6 +237,7 @@ export default function DailyPaper({ store, onCommit, disabled, redrawRef }) {
         triggerInkFlash()
         return null
       }
+      liveStrokeCostRef.current = 0
       const stroke = {
         id: newStrokeId(),
         color: colorRef.current,
@@ -223,11 +255,16 @@ export default function DailyPaper({ store, onCommit, disabled, redrawRef }) {
   const endStroke = useCallback(() => {
     const stroke = liveStrokeRef.current
     liveStrokeRef.current = null
+    liveStrokeCostRef.current = 0
     if (stroke) commitStroke(stroke)
   }, [commitStroke])
 
   const cancelStroke = useCallback(() => {
+    if (!liveStrokeRef.current) return
     liveStrokeRef.current = null
+    inkRef.current = Math.min(DAILY_INK_BUDGET, inkRef.current + liveStrokeCostRef.current)
+    liveStrokeCostRef.current = 0
+    setInk(inkRef.current)
     scheduleDraw()
   }, [scheduleDraw])
 
@@ -242,7 +279,9 @@ export default function DailyPaper({ store, onCommit, disabled, redrawRef }) {
 
       stroke.points.push(point)
       const segCost = segmentCost(segLen, stroke.width)
-      inkRef.current = Math.max(0, inkRef.current - segCost)
+      const spent = Math.min(inkRef.current, segCost)
+      liveStrokeCostRef.current += spent
+      inkRef.current -= spent
       setInk(inkRef.current)
 
       if (inkRef.current <= 0) {
@@ -263,56 +302,165 @@ export default function DailyPaper({ store, onCommit, disabled, redrawRef }) {
     [screenToWorld, endStroke, startStroke, scheduleDraw, triggerInkFlash],
   )
 
-  // ---- pointers ----------------------------------------------------------------
+  // ---- gestures ---------------------------------------------------------------
+  const beginGesture = useCallback(() => {
+    const points = [...pointersRef.current.values()]
+    if (points.length < 2) return
+    cancelStroke()
+    const [a, b] = points
+    gestureRef.current = {
+      startDist: Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY) || 1,
+      startMidX: (a.clientX + b.clientX) / 2,
+      startMidY: (a.clientY + b.clientY) / 2,
+      startView: { ...viewRef.current },
+    }
+  }, [cancelStroke])
+
+  const updateGesture = useCallback(() => {
+    const gesture = gestureRef.current
+    if (!gesture) return
+    const points = [...pointersRef.current.values()]
+    if (points.length < 2) return
+    const [a, b] = points
+    const distance = Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY) || 1
+    const midX = (a.clientX + b.clientX) / 2
+    const midY = (a.clientY + b.clientY) / 2
+    const scale = clamp(gesture.startView.scale * (distance / gesture.startDist), MIN_SCALE, MAX_SCALE)
+    const factor = scale / gesture.startView.scale
+    const wrap = wrapRef.current
+    const rect = wrap ? wrap.getBoundingClientRect() : { width: window.innerWidth, height: window.innerHeight }
+    const nextX = midX - (gesture.startMidX - gesture.startView.x) * factor
+    const nextY = midY - (gesture.startMidY - gesture.startView.y) * factor
+
+    viewRef.current = {
+      scale,
+      x: clamp(nextX, MIN_VISIBLE - PAPER_SIZE * scale, rect.width - MIN_VISIBLE),
+      y: clamp(nextY, MIN_VISIBLE - PAPER_SIZE * scale, rect.height - MIN_VISIBLE),
+    }
+    scheduleDraw()
+  }, [scheduleDraw])
+
+  const endGesture = useCallback(() => {
+    gestureRef.current = null
+  }, [])
+
   const onPointerDown = useCallback(
-    (e) => {
-      activeRef.current.add(e.pointerId)
-      if (drawingRef.current !== null) return
-      if (e.pointerType === 'mouse' && e.button !== 0) return
-      if (disabledRef.current) return
-      canvasRef.current?.setPointerCapture(e.pointerId)
-      drawingRef.current = e.pointerId
-      startStroke(e.clientX, e.clientY)
+    (event) => {
+      canvasRef.current?.setPointerCapture(event.pointerId)
+      pointersRef.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY })
+
+      if (pointersRef.current.size >= 2) {
+        beginGesture()
+        return
+      }
+
+      const isPan = event.button === 1 || (event.button === 0 && panKeyRef.current)
+      if (isPan) {
+        const wrap = wrapRef.current
+        const rect = wrap ? wrap.getBoundingClientRect() : { width: window.innerWidth, height: window.innerHeight }
+        gestureRef.current = {
+          panOnly: true,
+          startMidX: event.clientX,
+          startMidY: event.clientY,
+          startView: { ...viewRef.current },
+          containerRect: rect,
+        }
+        return
+      }
+
+      if (event.button !== 0 || disabledRef.current) return
+      startStroke(event.clientX, event.clientY)
     },
-    [startStroke],
+    [beginGesture, startStroke],
   )
 
   const onPointerMove = useCallback(
-    (e) => {
-      if (!activeRef.current.has(e.pointerId)) return
-      if (e.pointerId !== drawingRef.current) return
-      const coalesced = typeof e.getCoalescedEvents === 'function' ? e.getCoalescedEvents() : [e]
-      const events = coalesced.length ? coalesced : [e]
-      for (const evt of events) extendStroke(evt.clientX, evt.clientY)
+    (event) => {
+      if (!pointersRef.current.has(event.pointerId)) return
+      pointersRef.current.set(event.pointerId, { clientX: event.clientX, clientY: event.clientY })
+
+      const gesture = gestureRef.current
+      if (gesture) {
+        if (gesture.panOnly) {
+          const scale = gesture.startView.scale
+          const rect = gesture.containerRect
+          const nextX = gesture.startView.x + (event.clientX - gesture.startMidX)
+          const nextY = gesture.startView.y + (event.clientY - gesture.startMidY)
+          viewRef.current = {
+            ...viewRef.current,
+            x: clamp(nextX, MIN_VISIBLE - PAPER_SIZE * scale, rect.width - MIN_VISIBLE),
+            y: clamp(nextY, MIN_VISIBLE - PAPER_SIZE * scale, rect.height - MIN_VISIBLE),
+          }
+          scheduleDraw()
+        } else {
+          updateGesture()
+        }
+        return
+      }
+
+      const coalesced = typeof event.getCoalescedEvents === 'function' ? event.getCoalescedEvents() : [event]
+      for (const point of coalesced.length ? coalesced : [event]) extendStroke(point.clientX, point.clientY)
     },
-    [extendStroke],
+    [extendStroke, scheduleDraw, updateGesture],
   )
 
-  const onPointerUp = useCallback(
-    (e) => {
-      activeRef.current.delete(e.pointerId)
-      if (e.pointerId !== drawingRef.current) return
-      drawingRef.current = null
-      endStroke()
+  const releasePointer = useCallback(
+    (event) => {
+      pointersRef.current.delete(event.pointerId)
+      if (gestureRef.current) {
+        if (pointersRef.current.size < 2) endGesture()
+        return
+      }
+      if (liveStrokeRef.current) endStroke()
     },
-    [endStroke],
+    [endGesture, endStroke],
   )
 
-  const onPointerCancel = useCallback(
-    (e) => {
-      activeRef.current.delete(e.pointerId)
-      if (e.pointerId !== drawingRef.current) return
-      drawingRef.current = null
+  const cancelPointer = useCallback(
+    (event) => {
+      pointersRef.current.delete(event.pointerId)
+      if (gestureRef.current) {
+        if (pointersRef.current.size < 2) endGesture()
+        return
+      }
       cancelStroke()
     },
-    [cancelStroke],
+    [cancelStroke, endGesture],
   )
+
+  const onWheel = useCallback((event) => {
+    event.preventDefault()
+    if (gestureRef.current) return
+    const rect = canvasRef.current.getBoundingClientRect()
+    const { x, y, scale } = viewRef.current
+    const cx = event.clientX - rect.left
+    const cy = event.clientY - rect.top
+    let dy = event.deltaY
+    if (event.deltaMode === 1) dy *= 16
+    else if (event.deltaMode === 2) dy *= 100
+    const factor = Math.exp(-dy * (event.ctrlKey ? 0.01 : 0.0015))
+    const nextScale = clamp(scale * factor, MIN_SCALE, MAX_SCALE)
+    const ratio = nextScale / scale
+    const nextX = cx - (cx - x) * ratio
+    const nextY = cy - (cy - y) * ratio
+
+    viewRef.current = {
+      scale: nextScale,
+      x: clamp(nextX, MIN_VISIBLE - PAPER_SIZE * nextScale, rect.width - MIN_VISIBLE),
+      y: clamp(nextY, MIN_VISIBLE - PAPER_SIZE * nextScale, rect.height - MIN_VISIBLE),
+    }
+    scheduleDraw()
+  }, [scheduleDraw])
 
   useEffect(() => {
-    if (disabled) {
-      drawingRef.current = null
-      cancelStroke()
-    }
+    const canvas = canvasRef.current
+    if (!canvas) return undefined
+    canvas.addEventListener('wheel', onWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', onWheel)
+  }, [onWheel])
+
+  useEffect(() => {
+    if (disabled) cancelStroke()
   }, [disabled, cancelStroke])
 
   const inkPercent = Math.round((ink / DAILY_INK_BUDGET) * 100)
@@ -324,8 +472,8 @@ export default function DailyPaper({ store, onCommit, disabled, redrawRef }) {
         className="draw-canvas"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
-        onPointerUp={onPointerUp}
-        onPointerCancel={onPointerCancel}
+        onPointerUp={releasePointer}
+        onPointerCancel={cancelPointer}
       />
       {!disabled && (
         <div className="toolbar">

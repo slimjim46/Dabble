@@ -7,6 +7,10 @@
   position: relative;
   width: 100%;
   height: 100%;
+  --daily-on-page: #1d1d1f;
+  --daily-pill-bg: rgba(30, 30, 32, 0.92);
+  --daily-pill-border: rgba(255, 255, 255, 0.14);
+  --daily-pill-text: #f5f5f7;
 }
 
 /* ---- top chrome ---------------------------------------------------------- */
@@ -16,20 +20,31 @@
   left: 12px;
   right: 12px;
   z-index: 3;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    'left bar'
+    'done done';
+  align-items: start;
   gap: 8px;
   pointer-events: none;
 }
 
 .daily-top-left {
+  grid-area: left;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
   min-width: 0;
+}
+
+.daily-bar {
+  grid-area: bar;
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .daily-top > *,
@@ -41,12 +56,12 @@
 
 .daily-clock,
 .daily-prompt {
-  background: var(--ui-bg);
-  border: 1px solid var(--ui-border);
+  background: var(--daily-pill-bg);
+  border: 1px solid var(--daily-pill-border);
   border-radius: 999px;
   padding: 6px 12px;
   font-size: 14px;
-  color: var(--ui-text);
+  color: var(--daily-pill-text);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
@@ -61,13 +76,46 @@
 .daily-actions {
   position: absolute;
   left: 50%;
-  bottom: max(14px, calc(env(safe-area-inset-bottom) + 12px));
+  bottom: calc(max(12px, env(safe-area-inset-bottom)) + 83px);
   transform: translateX(-50%);
   z-index: 2;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 8px;
+}
+.daily-ready {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 80px 24px 90px;
+  text-align: center;
+}
+
+.daily-ready-prompt {
+  max-width: min(600px, calc(100vw - 40px));
+  margin: 0;
+  color: var(--daily-on-page);
+  font-size: clamp(32px, 8vw, 48px);
+  line-height: 1.15;
+  text-wrap: balance;
+}
+
+.daily-ready-note {
+  margin: 0 0 6px;
+  color: var(--daily-on-page);
+  font-size: 16px;
+  opacity: 0.78;
+}
+
+.daily-start {
+  padding: 14px 48px;
+  font-size: 17px;
 }
 
 .daily-note {
@@ -78,9 +126,19 @@
   z-index: 2;
   max-width: min(360px, calc(100vw - 40px));
   text-align: center;
-  color: var(--ui-text);
+  color: var(--daily-on-page);
   font-size: 15px;
   line-height: 1.5;
+}
+
+.daily-note-inline {
+  position: static;
+  max-width: min(600px, calc(100vw - 40px));
+  transform: none;
+}
+
+.daily-actions .daily-note-inline {
+  margin: 0;
 }
 
 .daily-note p {
@@ -106,17 +164,30 @@
   cursor: default;
 }
 
+.daily-done {
+  grid-area: done;
+  justify-self: center;
+  padding: 10px 24px;
+  font-size: 14px;
+}
+
 .daily-link {
-  background: var(--ui-bg);
-  border: 1px solid var(--ui-border);
+  background: var(--daily-pill-bg);
+  border: 1px solid var(--daily-pill-border);
   border-radius: 999px;
   padding: 8px 14px;
   font-size: 13px;
-  color: var(--ui-text);
+  color: var(--daily-pill-text);
   cursor: pointer;
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
   touch-action: manipulation;
+}
+
+.daily-recenter {
+  padding: 8px 10px;
+  font-size: 15px;
+  line-height: 1;
 }
 
 /* ---- vote grid ----------------------------------------------------------- */
@@ -128,12 +199,57 @@
   z-index: 1;
 }
 
+.daily-vote-section .daily-note {
+  position: static;
+  max-width: min(600px, calc(100vw - 40px));
+  margin: 0 auto 8px;
+  transform: none;
+}
+
 .daily-heading {
   font-size: 16px;
   font-weight: 600;
-  color: var(--ui-text);
+  color: var(--daily-on-page);
   margin: 0 0 12px;
   text-align: center;
+}
+
+@media (min-width: 560px) {
+  .daily-screen .daily-top {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: 'left bar';
+    align-items: center;
+    min-height: 36px;
+  }
+
+  .daily-screen .daily-done {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    grid-area: auto;
+    justify-self: auto;
+    transform: translate(-50%, -50%);
+  }
+}
+
+@media (max-width: 420px) {
+  .daily-screen .toolbar-row {
+    gap: 6px;
+  }
+
+  .daily-screen .swatches {
+    gap: 4px;
+  }
+
+  .daily-screen .swatch {
+    width: 24px;
+    height: 24px;
+  }
+
+  .daily-screen .brush {
+    min-width: 30px;
+    padding: 4px;
+  }
 }
 
 .vote-grid {

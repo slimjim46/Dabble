@@ -2,7 +2,10 @@
 // the constants-drift check (which queries dev as an anonymous user).
 //
 // Run: node tests/dailyClient.test.mjs  (SUPABASE_URL + VITE_SUPABASE_ANON_KEY)
+import { readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
+import { currentPath, navigate, subscribeToPath } from '../src/lib/navigation.js'
+import { DAILY_PATH, DAILY_GALLERY_PATH, dailyView } from '../src/daily/dailyRoute.js'
 import {
   DAILY_ATTEMPT_SECONDS,
   DAILY_GRACE_SECONDS,
@@ -39,16 +42,62 @@ globalThis.localStorage = {
   setItem: (k, v) => { _store.set(k, String(v)) },
   removeItem: (k) => { _store.delete(k) },
 }
-const URL = process.env.SUPABASE_URL
-const KEY = process.env.VITE_SUPABASE_ANON_KEY
-if (!URL || !KEY) { console.error('Set SUPABASE_URL + VITE_SUPABASE_ANON_KEY'); process.exit(1) }
-
 let pass = 0, fail = 0
 const check = (label, ok, extra) => {
   if (ok) { pass++; console.log('  ok   ' + label) }
   else { fail++; console.log('  FAIL ' + label + (extra ? ' — ' + extra : '')) }
 }
 const code = (e) => String(e?.code ?? '')
+
+// ---- 0. Daily routing / history -------------------------------------------
+{
+  const listeners = new Set()
+  const fakeWindow = {
+    location: { pathname: DAILY_PATH },
+    history: {
+      pushState(_state, _title, to) { fakeWindow.location.pathname = to },
+    },
+    addEventListener(type, fn) { if (type === 'popstate') listeners.add(fn) },
+    removeEventListener(type, fn) { if (type === 'popstate') listeners.delete(fn) },
+    dispatchEvent(event) {
+      if (event.type === 'popstate') for (const fn of listeners) fn(event)
+      return true
+    },
+  }
+  class FakePopStateEvent { constructor(type) { this.type = type } }
+  globalThis.window = fakeWindow
+  globalThis.PopStateEvent = FakePopStateEvent
+
+  let view = dailyView(currentPath())
+  const unsubscribe = subscribeToPath(() => { view = dailyView(currentPath()) })
+  check('route: direct /daily starts on the Daily screen', view === 'daily')
+  navigate(DAILY_GALLERY_PATH)
+  check('route: Gallery navigation renders the gallery',
+    fakeWindow.location.pathname === DAILY_GALLERY_PATH && view === 'gallery')
+  fakeWindow.location.pathname = DAILY_PATH
+  fakeWindow.dispatchEvent(new FakePopStateEvent('popstate'))
+  check('route: browser Back renders the Daily screen', view === 'daily')
+  navigate(DAILY_GALLERY_PATH)
+  navigate(DAILY_PATH)
+  check('route: gallery Back renders the Daily screen',
+    fakeWindow.location.pathname === DAILY_PATH && view === 'daily')
+  unsubscribe()
+  delete globalThis.window
+  delete globalThis.PopStateEvent
+
+  const main = readFileSync(new globalThis.URL('../src/main.jsx', import.meta.url), 'utf8')
+  check('main: subscribes to path history', main.includes('useSyncExternalStore(subscribeToPath, currentPath)'))
+  check('main: gallery branch uses dailyView', main.includes("dailyView(pathname) === 'gallery'"))
+}
+
+if (process.argv.includes('--routing-only')) {
+  console.log(`\n${pass} passed, ${fail} failed`)
+  process.exit(fail === 0 ? 0 : 1)
+}
+
+const URL = process.env.SUPABASE_URL
+const KEY = process.env.VITE_SUPABASE_ANON_KEY
+if (!URL || !KEY) { console.error('Set SUPABASE_URL + VITE_SUPABASE_ANON_KEY'); process.exit(1) }
 
 // ---- 1. constants drift ----------------------------------------------------
 {

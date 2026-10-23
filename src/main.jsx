@@ -1,6 +1,8 @@
-import React, { Suspense, lazy } from 'react'
+import React, { Suspense, lazy, useSyncExternalStore } from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App.jsx'
+import { currentPath, subscribeToPath } from './lib/navigation.js'
+import { DAILY_GALLERY_PATH, DAILY_PATH, dailyView } from './daily/dailyRoute.js'
 import './index.css'
 
 // /admin is a separate page with its own Supabase session (6.5), so its code
@@ -20,27 +22,31 @@ if ('serviceWorker' in navigator) {
   })
 }
 
-const pathname = window.location.pathname
-const isAdminRoute = pathname.startsWith('/admin')
-const isRoomsRoute = pathname === '/rooms' || pathname.startsWith('/rooms/') || pathname.startsWith('/r/')
-const isDailyRoute = pathname === '/daily' || pathname === '/daily/gallery'
+function Root() {
+  const pathname = useSyncExternalStore(subscribeToPath, currentPath)
+  const isAdminRoute = pathname.startsWith('/admin')
+  const isRoomsRoute = pathname === '/rooms' || pathname.startsWith('/rooms/') || pathname.startsWith('/r/')
+  const isDailyRoute = pathname === DAILY_PATH || pathname === DAILY_GALLERY_PATH
 
-ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
-    {isAdminRoute ? (
-      <Suspense fallback={<div className="admin-loading">Loading…</div>}>
-        <AdminApp />
-      </Suspense>
-    ) : isDailyRoute ? (
-      <Suspense fallback={<div className="admin-loading">Loading…</div>}>
-        {pathname === '/daily/gallery' ? <DailyGalleryApp /> : <DailyApp />}
-      </Suspense>
-    ) : isRoomsRoute ? (
-      <Suspense fallback={<div className="admin-loading">Loading…</div>}>
-        <RoomsApp />
-      </Suspense>
-    ) : (
-      <App />
-    )}
-  </React.StrictMode>,
-)
+  return (
+    <React.StrictMode>
+      {isAdminRoute ? (
+        <Suspense fallback={<div className="admin-loading">Loading…</div>}>
+          <AdminApp />
+        </Suspense>
+      ) : isDailyRoute ? (
+        <Suspense fallback={<div className="admin-loading">Loading…</div>}>
+          {dailyView(pathname) === 'gallery' ? <DailyGalleryApp /> : <DailyApp />}
+        </Suspense>
+      ) : isRoomsRoute ? (
+        <Suspense fallback={<div className="admin-loading">Loading…</div>}>
+          <RoomsApp />
+        </Suspense>
+      ) : (
+        <App />
+      )}
+    </React.StrictMode>
+  )
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<Root />)

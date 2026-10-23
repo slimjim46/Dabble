@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createStrokeStore } from '../engine/strokeStore.js'
+import { navigate } from '../lib/navigation.js'
 import { ensureAnonymousAuth, supabase } from '../lib/supabase.js'
 import {
   amIBanned,
@@ -14,6 +15,7 @@ import { clearDraft, loadDraft, saveDraft } from './dailyDraft.js'
 import { entryBytes, toSubmitShape } from './dailyLimits.js'
 import { attemptRemainingMs, humanCountdown, msToNextUtcMidnight } from './dailyTimer.js'
 import { DAILY_ATTEMPT_SECONDS, DAILY_FULL_MARGIN_BYTES, DAILY_MAX_ENTRY_BYTES } from './constants.js'
+import { DAILY_GALLERY_PATH } from './dailyRoute.js'
 import DailyPaper from './DailyPaper.jsx'
 import VoteGrid from './VoteGrid.jsx'
 
@@ -22,6 +24,7 @@ const SUBMIT_BACKOFF_MS = [1000, 2000, 4000, 8000, 8000, 8000]
 export default function DailyScreen() {
   const store = useMemo(() => createStrokeStore(), [])
   const redrawRef = useRef(() => {})
+  const recenterRef = useRef(() => {})
 
   const [status, setStatus] = useState('loading') // loading|error|banned|no_prompt|ready|drawing|submitting|submitted|timed_out|submit_failed
   const [prompt, setPrompt] = useState(null) // { id, prompt }
@@ -197,9 +200,10 @@ export default function DailyScreen() {
   }, [prompt, beginDrawing])
 
   const leave = useCallback(() => {
-    window.history.pushState({}, '', '/')
-    window.dispatchEvent(new PopStateEvent('popstate'))
+    navigate('/')
   }, [])
+
+  const paperVisible = status === 'drawing' || status === 'submitting' || status === 'submit_failed'
 
   return (
     <div className="daily-screen">
@@ -210,15 +214,24 @@ export default function DailyScreen() {
               {Math.max(0, Math.ceil(remainingMs / 1000))}s
             </span>
           )}
-          {prompt && (
+          {prompt && status !== 'ready' && (
             <span className="daily-prompt" title="Today's prompt">
               {prompt.prompt}
             </span>
           )}
-          {status === 'ready' && <span className="daily-note">2 minutes, one try</span>}
         </div>
+        {status === 'drawing' && (
+          <button type="button" className="daily-button daily-done" onClick={submit}>
+            Done
+          </button>
+        )}
         <div className="daily-bar">
-          <button type="button" className="daily-link" onClick={() => { window.history.pushState({}, '', '/daily/gallery'); window.dispatchEvent(new PopStateEvent('popstate')) }}>
+          {paperVisible && (
+            <button type="button" className="daily-link daily-recenter" onClick={() => recenterRef.current()} title="Recenter view" aria-label="Recenter view">
+              🎯
+            </button>
+          )}
+          <button type="button" className="daily-link" onClick={() => navigate(DAILY_GALLERY_PATH)}>
             Gallery
           </button>
           <button type="button" className="daily-link" onClick={leave}>
@@ -248,8 +261,10 @@ export default function DailyScreen() {
       )}
 
       {status === 'ready' && (
-        <div className="daily-actions">
-          <button type="button" className="daily-button" onClick={start}>
+        <div className="daily-ready">
+          <h1 className="daily-ready-prompt">Draw: {prompt?.prompt}</h1>
+          <p className="daily-ready-note">2 minutes, one try</p>
+          <button type="button" className="daily-button daily-start" onClick={start}>
             Start
           </button>
         </div>
@@ -257,30 +272,20 @@ export default function DailyScreen() {
 
       {(status === 'drawing' || status === 'submitting' || status === 'submit_failed') && (
         <>
-          <DailyPaper store={store} onCommit={onCommit} disabled={full || status !== 'drawing'} redrawRef={redrawRef} />
+          <DailyPaper store={store} onCommit={onCommit} disabled={full || status !== 'drawing'} redrawRef={redrawRef} recenterRef={recenterRef} />
           <div className="daily-actions">
-            {status === 'drawing' && (
-              <button type="button" className="daily-button" onClick={submit}>
-                Done
-              </button>
-            )}
-            {status === 'submitting' && <span className="daily-note">Saving…</span>}
-            {status === 'submit_failed' && <span className="daily-note">{failReason}</span>}
-            {full && <span className="daily-note">Paper full — press Done to submit.</span>}
+            {status === 'submitting' && <span className="daily-note daily-note-inline">Saving…</span>}
+            {status === 'submit_failed' && <span className="daily-note daily-note-inline">{failReason}</span>}
+            {full && <span className="daily-note daily-note-inline">Paper full — press Done to submit.</span>}
           </div>
         </>
       )}
 
       {status === 'submitted' && (
-        <div className="daily-note">
-          <p>Entry in review.</p>
-          <p>Come back tomorrow to see and vote on entries.</p>
-        </div>
-      )}
-
-      {status === 'submitted' && (
         <div className="daily-vote-section">
           <h2 className="daily-heading">Vote on yesterday's entries</h2>
+          <p className="daily-note daily-note-inline">Entry in review.</p>
+          <p className="daily-note daily-note-inline">Come back tomorrow to see and vote on entries.</p>
           <VoteGrid supabase={supabase} />
         </div>
       )}

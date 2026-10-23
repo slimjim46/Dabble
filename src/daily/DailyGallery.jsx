@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
+import { navigate } from '../lib/navigation.js'
 import { supabase } from '../lib/supabase.js'
+import { DAILY_PATH } from './dailyRoute.js'
+import './daily.css'
 
 export default function DailyGallery() {
   const [winners, setWinners] = useState([])
@@ -30,8 +33,7 @@ export default function DailyGallery() {
   }, [])
 
   const back = useCallback(() => {
-    window.history.pushState({}, '', '/daily')
-    window.dispatchEvent(new PopStateEvent('popstate'))
+    navigate(DAILY_PATH)
   }, [])
 
   return (
