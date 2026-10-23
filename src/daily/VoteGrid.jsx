@@ -91,7 +91,7 @@ export default function VoteGrid({ supabase }) {
 
   if (loading) return <p className="daily-note">Loading entries…</p>
   if (error) return <p className="daily-note">{error}</p>
-  if (entries.length === 0) return <p className="daily-note">No entries to vote on.</p>
+  if (entries.length === 0) return <p className="daily-note">No entries to vote on yet.</p>
 
   return (
     <div className="vote-grid">

@@ -100,9 +100,9 @@ try {
   const strokes = [{ color: '#30a46c', width: 6, points: [100, 100, 110, 118] }]
   await playerClient.rpc('submit_daily_entry', { p_prompt_id: promptId, p_strokes: strokes })
 
-  // List pending entries
-  const list = await adminClient.rpc('admin_list_daily_entries', { p_status: 'pending', p_limit: 20 })
-  check('admin-list', 'admin can list pending entries',
+  // List approved entries (entries are now auto-approved on submit)
+  const list = await adminClient.rpc('admin_list_daily_entries', { p_status: 'approved', p_limit: 20 })
+  check('admin-list', 'admin can list approved entries',
     !list.error && Array.isArray(list.data) && list.data.length >= 1,
     list.error ? `${code(list.error)} ${list.error.message}` : `rows=${list.data?.length}`)
 
@@ -111,21 +111,20 @@ try {
   if (!entry) {
     console.log('  SKIP review tests: could not find the seeded entry')
   } else {
-    // Approve
+    // Verify entry is approved immediately after submit
+    check('admin-auto-approve', 'submitted entry has status=approved', entry.status === 'approved', `status=${entry.status}`)
+
+    // Approve is now a no-op (already approved), but should still succeed
     const approve = await adminClient.rpc('admin_review_daily_entry', { p_entry_id: entry.id, p_approve: true })
-    check('admin-approve', 'admin can approve an entry',
-      !approve.error && approve.data?.changed === 1,
+    check('admin-approve-noop', 'admin approve on already-approved entry succeeds (no-op)',
+      !approve.error && approve.data?.changed === 0,
       approve.error ? `${code(approve.error)} ${approve.error.message}` : JSON.stringify(approve.data))
 
-    // Check status
+    // Check status remains approved
     const approvedCheck = await adminClient.rpc('admin_list_daily_entries', { p_prompt_date: null, p_status: 'approved', p_limit: 50 })
     const approvedEntry = (approvedCheck.data ?? []).find((e) => e.id === entry.id)
-    check('admin-approve-status', 'approved entry has status=approved',
+    check('admin-approve-status', 'entry still has status=approved after no-op approve',
       approvedEntry?.status === 'approved', `status=${approvedEntry?.status} err=${approvedCheck.error?.message}`)
-
-    // Check audit log (via the entry being approved — we can't read admin_audit_log directly, but the RPC succeeded)
-    check('admin-approve-audit', 'approve RPC succeeded (audit log written by security definer)',
-      !approve.error, approve.error ? approve.error.message : 'ok')
 
     // Null p_approve
     const nullApprove = await adminClient.rpc('admin_review_daily_entry', { p_entry_id: entry.id, p_approve: null })
@@ -154,7 +153,7 @@ try {
     await stuckClient.auth.signInAnonymously()
     await stuckClient.rpc('start_daily_attempt', { p_prompt_id: promptId })
     // Don't submit — this entry has submitted_at = null
-    const listAfter = await adminClient.rpc('admin_list_daily_entries', { p_status: 'pending', p_limit: 50 })
+    const listAfter = await adminClient.rpc('admin_list_daily_entries', { p_status: 'approved', p_limit: 50 })
     const stuckEntry = (listAfter.data ?? []).find((e) => e.submitted_at === null)
     check('admin-stuck', 'unsubmitted (stuck) entries are not listed',
       !stuckEntry, stuckEntry ? 'found unsubmitted entry in list' : 'ok')
@@ -166,10 +165,19 @@ try {
     // voter must have submitted today's entry to vote
     await voterClient.rpc('start_daily_attempt', { p_prompt_id: promptId })
     await voterClient.rpc('submit_daily_entry', { p_prompt_id: promptId, p_strokes: [{ color: '#f76b15', width: 3, points: [200, 200, 210, 210] }] })
-    // vote on the approved entry (from yesterday's prompt... but it's today's, so vote will fail with "voting is only for the previous day")
-    // Instead, test that the entry is approved and would be votable if it were yesterday's
-    check('admin-votable', 'approved entry has status=approved (votable condition met)',
-      approvedEntry?.status === 'approved', `status=${approvedEntry?.status}`)
+    // Same-day voting: the approved entry from today's prompt is votable.
+    const votable = await voterClient.rpc('vote_daily_entry', { p_entry_id: entry.id })
+    check('admin-votable', 'approved same-day entry is votable', !votable.error,
+      votable.error ? `${code(votable.error)} ${votable.error.message}` : `status=${approvedEntry?.status}`)
+
+    // Additional check: rejected entry is removed from vote grid and cannot be voted on
+    const gridAfterReject = await voterClient.rpc('get_daily_vote_grid', { p_limit: 12, p_offset: 0 })
+    const rejectedInGrid = (gridAfterReject.data?.entries ?? []).some((e) => e.id === player2Entry.id)
+    check('admin-reject-grid', 'rejected entry is removed from vote grid', !rejectedInGrid,
+      rejectedInGrid ? 'rejected entry found in grid' : 'ok')
+
+    const voteRejected = await voterClient.rpc('vote_daily_entry', { p_entry_id: player2Entry.id })
+    check('admin-reject-vote', 'rejected entry cannot be voted on (22023)', code(voteRejected.error) === '22023', code(voteRejected.error))
   }
 } finally {
   await adminClient.rpc('dev_only_set_admin', { p_enabled: false })

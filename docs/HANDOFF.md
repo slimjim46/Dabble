@@ -1,92 +1,76 @@
 # Handoff
 
 ## Task
-Fix Daily Challenge gallery navigation: Gallery must render the gallery without
-a reload, the gallery Back button and browser Back must return to Daily, and a
-direct `/daily/gallery` load must be styled and usable.
+Apply the three Daily migrations and the backfill to DEV only.
 
 ## Where
 - Date: 2026-10-23
-- Branch: `v2-ui-daily-screens`
-- Last commit: `0d459a8 docs: handoff workflow, status and rules cleanup`
-- Committed? No. This task is uncommitted alongside the earlier uncommitted
-  Daily UI corrections in `DailyScreen.jsx`, `DailyPaper.jsx` and `daily.css`.
+- Branch: `v2-phase-5e-same-day-voting`
+- Base: `main` at `0a7ab24 ui: daily layout, Done button, gallery navigation fixes`
+- Committed? No. All Phase 5e/5f work plus admin UI changes is uncommitted.
 
-## What changed
-- `src/main.jsx`: route selection now subscribes to `popstate` via
-  `useSyncExternalStore`. Previously `window.location.pathname` was read once
-  at module load, so Gallery/Back only changed the URL.
-- `src/lib/navigation.js` (new): shared `currentPath`, `navigate` and
-  `subscribeToPath` helpers. `navigate` keeps the existing
-  `pushState` + `popstate` behaviour.
-- `src/daily/dailyRoute.js` (new): `DAILY_PATH`, `DAILY_GALLERY_PATH` and
-  `dailyView` used by both `main.jsx` and the test.
-- `src/daily/DailyScreen.jsx`: Gallery and leave buttons use the shared
-  `navigate` helper and route constants. Timer, submit, voting, one-try logic,
-  recenter and Done placement were not changed by this task.
-- `src/daily/DailyGallery.jsx`: Back uses `navigate(DAILY_PATH)` and the file
-  imports `daily.css`, so a direct `/daily/gallery` load is styled. Previously
-  only `DailyApp.jsx` imported that CSS.
-- `tests/dailyClient.test.mjs`: added six routing/history checks and a
-  `--routing-only` mode that runs before the Supabase env requirement.
-- `package.json`: `npm test` now includes the routing-only test.
-- `vercel.json`: unchanged; `/daily` and `/daily/:path*` already rewrite to
-  `index.html`, covering `/daily/gallery`.
-- No rooms/plaza/admin code, migration, API, or Done layout was changed.
+## What was done
+
+### 1. Confirmed DEV project
+- Linked project ref: `mlynwcajwxmceglgtcat` (Dabble-Dev) — matches `.env` VITE_SUPABASE_URL.
+- Previous link was to production (`ovuxjmwykaipwhbdfawg`); re-linked to dev.
+
+### 2. Applied three migrations in timestamp order via `supabase db push`
+| Migration | Status before | Status after |
+|-----------|---------------|--------------|
+| `20261026000000_phase5d_daily_prompts.sql` | local only | **applied on remote** |
+| `20261027000000_phase5e_same_day_voting.sql` | local only | **applied on remote** |
+| `20261028000000_phase5f_auto_approve.sql` | local only | **applied on remote** |
+
+All three now show in `supabase migration list` with identical Local/Remote timestamps.
+
+### 3. Backfill applied
+- **Count query first**: `select count(*) from public.daily_entries where status = 'pending' and submitted_at is not null;` → **51 rows**
+- **Backfill update**: `update public.daily_entries set status = 'approved' where status = 'pending' and submitted_at is not null;`
+- **Verification count**: `select count(*) from public.daily_entries where status = 'pending' and submitted_at is not null;` → **0 rows**
+
+51 pending submitted entries promoted to `approved`.
+
+### 4. Grants check (read-only)
+Confirmed `anon` has **no execute** on any of the four functions:
+
+| Function | Execute grants (from `proacl`) |
+|----------|--------------------------------|
+| `vote_daily_entry` | `postgres`, `authenticated`, `service_role` |
+| `get_daily_vote_grid` | `postgres`, `authenticated`, `service_role` |
+| `submit_daily_entry` | `postgres`, `authenticated`, `service_role` |
+| `admin_review_daily_entry` | `postgres`, `authenticated`, `service_role` |
+
+`anon` is absent from all — correct.
 
 ## Verification
-- Runtime: Node `v22.23.4`.
-- New test before the fix: failed with `ERR_MODULE_NOT_FOUND` for the new
-  routing modules.
-- After the fix: `node tests/dailyClient.test.mjs --routing-only` passed
-  (`6 passed, 0 failed`).
-- `npm test`: passed; existing `363 passed, 0 failed` plus the new
-  `6 passed, 0 failed`.
-- `npm run build`: passed; Vite transformed 130 modules with no warnings.
-- `git diff --check`: passed.
-- External Playwright harness: `/tmp/opencode/ui-shots/capture.mjs`, fake
-  Supabase only (`127.0.0.1:54321`, `fake-anon-key`); non-fake external requests
-  were blocked.
-- Harness checks passed:
-  - Direct `/daily/gallery` loaded with `.daily-gallery` computed
-    `position: absolute`, proving `daily.css` was present.
-  - `390x844`: top chrome bottom `51`, first winner top `60` (`9px` clear);
-    Back button `left 316.4375`, `top 10`, `right 378`, `bottom 43`; no
-    horizontal overflow.
-  - `1280x800`: top chrome bottom `46`, first winner top `60` (`14px` clear);
-    Back button `left 1206.4375`, `top 11.5`, `right 1268`, `bottom 44.5`.
-  - Empty state rendered centred; no horizontal overflow at either size.
-  - Gallery Back returned to `/daily`; Gallery button then rendered
-    `/daily/gallery`; `history.back()` returned to `/daily`.
-- Screenshots:
-  `/tmp/opencode/ui-shots/view/gallery-after/gallery-390x844-dark.png`,
-  `gallery-1280x800-dark.png`,
-  `gallery_empty-390x844-dark.png`,
-  `gallery_empty-1280x800-dark.png`.
-- Visual inspection was not possible: this model cannot accept image input.
-  The layout claims above come from Playwright DOM/geometry assertions and
-  computed styles, not from viewing the images.
+- `supabase migration list`: all three migrations now show matching Local/Remote timestamps.
+- Backfill: 51 → 0 pending submitted entries.
+- Grants: `anon` has no execute on the four functions.
 
 ## Database / infrastructure
-- Migrations applied: none. No policies, functions, grants/revokes, or
-  environment settings changed. Nothing applied to production.
-- `vercel.json` was inspected, not edited. No deployment was performed.
-- The temporary Vite server was stopped after the harness run.
+- Migrations applied to **dev only** (project `mlynwcajwxmceglgtcat`).
+- Backfill applied to dev only.
+- No dev-backed test suite run (the Daily dev tests overwrite dev data).
+- No production changes.
+- No code changes this task.
+- No commit created.
+
+## Owner risk
+- Submissions are now public without review (entries auto-approved on submit via `20261028000000`).
+- Admin reject is the safety net — admin can find entries via **Approved** tab, reject them, and restore via **Rejected** tab.
+- No image moderation exists (v2 Phase 6 not built).
 
 ## Open issues
-- No image-based visual review was possible in this session.
-- The screenshot harness and images are under `/tmp/opencode/ui-shots/`, not in
-  git.
-- The earlier wide-screen issue remains: at `940x800`/`1280x800` the drawing
-  paper bottom can sit behind the toolbar. It is outside this task.
-
-## Owner must do manually
-None.
+- Dev-backed test suites must be run now that migrations are applied.
+- The owner should run the dev-backed suites with `DEV_SERVICE_ROLE_KEY`:
+  `node tests/dailySameDayVote.test.mjs`,
+  `node tests/dailyVote.test.mjs`,
+  `node tests/daily.test.mjs`,
+  `DEV_ADMIN_EMAIL=... DEV_ADMIN_PASSWORD=... node tests/dailyAdmin.test.mjs`.
 
 ## Doc discrepancies noticed
-- `docs/STATUS.md` still records the owner-maintained table as stale for v2
-  Phases 2–5. That table was not edited.
+- `docs/STATUS.md` still records the owner-maintained v2 Status table as stale for Phases 2–5. That table was not edited.
 
 ## Suggested next task
-Review the gallery screenshots visually, then continue the remaining Daily
-screen work or commit the branch when ready.
+Run the dev-backed suites against the updated dev database, visually verify the submitted/vote screenshots, then commit the Phase 5e/5f branch if approved.

@@ -47,6 +47,18 @@
   gap: 8px;
 }
 
+.daily-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.daily-tab[aria-selected='true'] {
+  background: #0090ff;
+  border-color: #0090ff;
+  color: #ffffff;
+}
+
 .daily-top > *,
 .daily-top .daily-clock,
 .daily-top .daily-prompt,
@@ -184,6 +196,11 @@
   touch-action: manipulation;
 }
 
+.daily-link:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .daily-recenter {
   padding: 8px 10px;
   font-size: 15px;
@@ -212,6 +229,14 @@
   color: var(--daily-on-page);
   margin: 0 0 12px;
   text-align: center;
+}
+
+.daily-vote-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding-top: 20vh;
 }
 
 @media (min-width: 560px) {

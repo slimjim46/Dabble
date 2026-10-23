@@ -4,7 +4,7 @@
 // a batch the server would reject. Pure functions: tests/dailyClient.test.mjs
 // runs these and the real RPC on the same edge payloads.
 import { PAPER_SIZE } from '../lib/constants.js'
-import { MAX_POINT_NUMBERS, MIN_STROKE_WIDTH, MAX_STROKE_WIDTH } from '../lib/strokeCodec.js'
+import { MAX_POINT_NUMBERS, MIN_STROKE_WIDTH, MAX_STROKE_WIDTH, encodePoints } from '../lib/strokeCodec.js'
 import {
   DAILY_INK_BUDGET,
   DAILY_INK_CAPACITY,
@@ -80,7 +80,13 @@ export function entryBytes(strokes) {
 
 /** The whole submission: {color, width, points (flat)} objects, in order. */
 export function toSubmitShape(strokes) {
-  return strokes.map((s) => ({ color: s.color, width: s.width, points: s.points }))
+  return strokes.map((s) => ({
+    color: s.color,
+    width: s.width,
+    points: Array.isArray(s.points) && typeof s.points[0] === 'object'
+      ? encodePoints(s.points)
+      : s.points,
+  }))
 }
 
 /**

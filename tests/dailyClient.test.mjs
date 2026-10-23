@@ -5,7 +5,13 @@
 import { readFileSync } from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
 import { currentPath, navigate, subscribeToPath } from '../src/lib/navigation.js'
-import { DAILY_PATH, DAILY_GALLERY_PATH, dailyView } from '../src/daily/dailyRoute.js'
+import {
+  DAILY_PATH,
+  DAILY_GALLERY_PATH,
+  DAILY_GALLERY_VOTE_PATH,
+  dailyGalleryTab,
+  dailyView,
+} from '../src/daily/dailyRoute.js'
 import {
   DAILY_ATTEMPT_SECONDS,
   DAILY_GRACE_SECONDS,
@@ -53,9 +59,13 @@ const code = (e) => String(e?.code ?? '')
 {
   const listeners = new Set()
   const fakeWindow = {
-    location: { pathname: DAILY_PATH },
+    location: { pathname: DAILY_PATH, search: '' },
     history: {
-      pushState(_state, _title, to) { fakeWindow.location.pathname = to },
+      pushState(_state, _title, to) {
+        const url = new globalThis.URL(to, 'http://localhost')
+        fakeWindow.location.pathname = url.pathname
+        fakeWindow.location.search = url.search
+      },
     },
     addEventListener(type, fn) { if (type === 'popstate') listeners.add(fn) },
     removeEventListener(type, fn) { if (type === 'popstate') listeners.delete(fn) },
@@ -74,7 +84,15 @@ const code = (e) => String(e?.code ?? '')
   navigate(DAILY_GALLERY_PATH)
   check('route: Gallery navigation renders the gallery',
     fakeWindow.location.pathname === DAILY_GALLERY_PATH && view === 'gallery')
+  navigate(DAILY_GALLERY_VOTE_PATH)
+  check('route: /daily/gallery?tab=vote opens the Vote tab',
+    fakeWindow.location.pathname === DAILY_GALLERY_PATH &&
+    dailyGalleryTab(fakeWindow.location.search) === 'vote' &&
+    view === 'gallery')
+  check('route: gallery defaults to the Winners tab',
+    dailyGalleryTab('') === 'winners' && dailyGalleryTab('?tab=other') === 'winners')
   fakeWindow.location.pathname = DAILY_PATH
+  fakeWindow.location.search = ''
   fakeWindow.dispatchEvent(new FakePopStateEvent('popstate'))
   check('route: browser Back renders the Daily screen', view === 'daily')
   navigate(DAILY_GALLERY_PATH)
@@ -227,6 +245,14 @@ if (!URL || !KEY) { console.error('Set SUPABASE_URL + VITE_SUPABASE_ANON_KEY'); 
 {
   const s = [{ color: '#30a46c', width: 6, points: [1, 2, 3, 4] }]
   check('shape: toSubmitShape drops nothing extra', JSON.stringify(toSubmitShape(s)) === JSON.stringify(s))
+}
+
+// ---- 11. canvas point objects flatten to server wire format -------------------
+{
+  const drawn = [{ color: '#30a46c', width: 6, points: [{ x: 1.5, y: 2 }, { x: 3, y: 4.25 }] }]
+  const wire = toSubmitShape(drawn)
+  check('shape: canvas {x,y} points become flat numbers', JSON.stringify(wire) === JSON.stringify([{ color: '#30a46c', width: 6, points: [1.5, 2, 3, 4.3] }]))
+  check('shape: converted stroke passes server-shape validation', wire.every(isValidStroke))
 }
 
 console.log(`\n${pass} passed, ${fail} failed`)

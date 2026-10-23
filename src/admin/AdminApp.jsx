@@ -120,6 +120,7 @@ export default function AdminApp() {
   const [dailyEntries, setDailyEntries] = useState([])
   const [dailyCursor, setDailyCursor] = useState({ submittedAt: null, id: null })
   const [dailyHasMore, setDailyHasMore] = useState(true)
+  const [dailyStatus, setDailyStatus] = useState('approved') // 'approved' | 'rejected'
 
   // /admin must not appear in search results (6.5).
   useEffect(() => {
@@ -148,7 +149,7 @@ export default function AdminApp() {
       setError('')
       if (which === 'daily') {
         const { data, error: rpcError } = await client.rpc('admin_list_daily_entries', {
-          p_status: 'pending', p_limit: PAGE,
+          p_status: dailyStatus, p_limit: PAGE,
         })
         if (rpcError) {
           if (rpcError.code === '42501') setAccess('denied')
@@ -215,7 +216,7 @@ export default function AdminApp() {
     if (!client || !session || busy || !dailyHasMore) return
     setBusy(true)
     const { data, error: rpcError } = await client.rpc('admin_list_daily_entries', {
-      p_status: 'pending', p_limit: PAGE,
+      p_status: dailyStatus, p_limit: PAGE,
       p_after_submitted_at: dailyCursor.submittedAt,
       p_after_id: dailyCursor.id,
     })
@@ -304,7 +305,7 @@ export default function AdminApp() {
       await load('daily', session)
       setBusy(false)
     },
-    [client, session, load],
+    [client, session, load, dailyStatus],
   )
 
   const sendMagicLink = useCallback(
@@ -424,8 +425,24 @@ export default function AdminApp() {
 
       {tab === 'daily' ? (
         <>
+          <div className="admin-tabs" style={{ marginBottom: 12 }}>
+            <button
+              type="button"
+              className={dailyStatus === 'approved' ? 'admin-tab-active' : ''}
+              onClick={() => setDailyStatus('approved')}
+            >
+              Approved
+            </button>
+            <button
+              type="button"
+              className={dailyStatus === 'rejected' ? 'admin-tab-active' : ''}
+              onClick={() => setDailyStatus('rejected')}
+            >
+              Rejected
+            </button>
+          </div>
           {busy && dailyEntries.length === 0 && <p className="admin-muted">Loading…</p>}
-          {!busy && dailyEntries.length === 0 && <p className="admin-muted">No pending daily entries.</p>}
+          {!busy && dailyEntries.length === 0 && <p className="admin-muted">No {dailyStatus} daily entries.</p>}
           <div className="admin-list">
             {dailyEntries.map((entry) => (
               <article key={entry.id} className="admin-card admin-row">
@@ -435,20 +452,23 @@ export default function AdminApp() {
                   <span className="admin-muted">{timeOf(entry.submitted_at)}</span>
                   <span className="admin-muted">{entry.status}</span>
                   <div className="admin-actions">
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => reviewDailyEntry(entry, true)}
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={() => reviewDailyEntry(entry, false)}
-                    >
-                      Reject
-                    </button>
+                    {entry.status === 'rejected' ? (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => reviewDailyEntry(entry, true)}
+                      >
+                        Restore
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => reviewDailyEntry(entry, false)}
+                      >
+                        Reject
+                      </button>
+                    )}
                   </div>
                 </div>
               </article>

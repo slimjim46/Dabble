@@ -1,13 +1,89 @@
 import { useCallback, useEffect, useState } from 'react'
 import { navigate } from '../lib/navigation.js'
 import { supabase } from '../lib/supabase.js'
-import { DAILY_PATH } from './dailyRoute.js'
+import { getMyEntry, getTodayPrompt } from './dailyApi.js'
+import { DAILY_GALLERY_PATH, DAILY_GALLERY_VOTE_PATH, DAILY_PATH, dailyGalleryTab } from './dailyRoute.js'
+import VoteGrid from './VoteGrid.jsx'
 import './daily.css'
 
+function VoteTab({ onBack }) {
+  const [state, setState] = useState({ status: 'loading' })
+
+  useEffect(() => {
+    let cancelled = false
+    async function load() {
+      if (!supabase) {
+        setState({ status: 'error' })
+        return
+      }
+      try {
+        const prompt = await getTodayPrompt(supabase)
+        if (cancelled) return
+        if (!prompt) {
+          setState({ status: 'not_submitted' })
+          return
+        }
+        const entry = await getMyEntry(supabase, prompt.id)
+        if (cancelled) return
+        setState({ status: entry?.submitted_at ? 'submitted' : 'not_submitted' })
+      } catch {
+        if (!cancelled) setState({ status: 'error' })
+      }
+    }
+    load()
+    return () => { cancelled = true }
+  }, [])
+
+  if (state.status === 'loading') {
+    return (
+      <div className="daily-vote-section">
+        <p className="daily-note">Loading…</p>
+      </div>
+    )
+  }
+  if (state.status === 'not_submitted') {
+    return (
+      <div className="daily-vote-section">
+        <div className="daily-vote-empty">
+          <p className="daily-note daily-note-inline">Draw today's prompt first to vote.</p>
+          <button type="button" className="daily-button" onClick={onBack}>Go to Daily</button>
+        </div>
+      </div>
+    )
+  }
+  if (state.status === 'error') {
+    return (
+      <div className="daily-vote-section">
+        <p className="daily-note">Could not load the vote grid.</p>
+      </div>
+    )
+  }
+  return (
+    <div className="daily-vote-section">
+      <h2 className="daily-heading">Vote for your favourites</h2>
+      <p className="daily-note daily-note-inline">Entry in! Vote for your favourites.</p>
+      <p className="daily-note daily-note-inline">Winners are announced a couple of days after voting.</p>
+      <VoteGrid supabase={supabase} />
+    </div>
+  )
+}
+
 export default function DailyGallery() {
+  const [tab, setTab] = useState(() => dailyGalleryTab(window.location.search))
   const [winners, setWinners] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+
+  useEffect(() => {
+    const sync = () => setTab(dailyGalleryTab(window.location.search))
+    window.addEventListener('popstate', sync)
+    return () => window.removeEventListener('popstate', sync)
+  }, [])
+
+  const switchTab = useCallback((next) => {
+    if (next === tab) return
+    navigate(next === 'vote' ? DAILY_GALLERY_VOTE_PATH : DAILY_GALLERY_PATH)
+  }, [tab])
 
   useEffect(() => {
     if (!supabase) { setLoading(false); return }
@@ -40,17 +116,37 @@ export default function DailyGallery() {
     <div className="daily-screen">
       <div className="daily-top">
         <div className="daily-top-left">
-          <span className="daily-prompt">Winners gallery</span>
+          <div className="daily-tabs" role="tablist" aria-label="Daily gallery">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'vote'}
+              className="daily-link daily-tab"
+              onClick={() => switchTab('vote')}
+            >
+              Vote
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'winners'}
+              className="daily-link daily-tab"
+              onClick={() => switchTab('winners')}
+            >
+              Winners
+            </button>
+          </div>
         </div>
         <div className="daily-bar">
           <button type="button" className="daily-link" onClick={back}>Back</button>
         </div>
       </div>
+      {tab === 'vote' ? <VoteTab onBack={back} /> : (
       <div className="daily-gallery">
         {loading && <p className="daily-note">Loading…</p>}
         {error && <p className="daily-note">{error}</p>}
         {!loading && !error && winners.length === 0 && (
-          <p className="daily-note">No winners yet. Check back after the first voting day.</p>
+          <p className="daily-note">No winners yet. Winners are announced a couple of days after voting.</p>
         )}
         {winners.map((w) => {
           const url = w.image_path
@@ -73,6 +169,7 @@ export default function DailyGallery() {
           )
         })}
       </div>
+      )}
     </div>
   )
 }

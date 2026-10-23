@@ -249,7 +249,7 @@ if (!promptToday || !promptYesterday || !promptTomorrow) {
     p_started_at: new Date().toISOString(), p_status: 'approved',
   })).data
   const today = await A.c.rpc('vote_daily_entry', { p_entry_id: bToday })
-  check('15f', "voting on today's entry is rejected (22023)", code(today.error) === '22023', code(today.error))
+  check('15f', "voting on today's approved entry is accepted", !today.error, today.error ? `${code(today.error)} ${today.error.message}` : '')
 
   const D = await signIn('D')
   const dYesterday = (await D.c.rpc('dev_only_seed_daily_entry', {

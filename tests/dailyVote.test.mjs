@@ -54,7 +54,7 @@ const bEntry = (await B.c.rpc('dev_only_seed_daily_entry', {
 // A and B also need today's entries (to be eligible voters)
 const today = utcToday()
 const promptToday = (await A.c.rpc('dev_only_set_daily_prompt', { p_prompt_date: today, p_prompt: 'cat' })).data
-await A.c.rpc('dev_only_seed_daily_entry', { p_prompt_id: promptToday, p_strokes: validStrokes(), p_started_at: new Date().toISOString(), p_status: 'approved' })
+const aToday = (await A.c.rpc('dev_only_seed_daily_entry', { p_prompt_id: promptToday, p_strokes: validStrokes(), p_started_at: new Date().toISOString(), p_status: 'approved' })).data
 await B.c.rpc('dev_only_seed_daily_entry', { p_prompt_id: promptToday, p_strokes: validStrokes(), p_started_at: new Date().toISOString(), p_status: 'approved' })
 
 // ---- 1. cannot vote on own entry ------------------------------------------
@@ -157,7 +157,7 @@ await B.c.rpc('dev_only_seed_daily_entry', { p_prompt_id: promptToday, p_strokes
   check(9, 'grid returns entries', !grid.error && Array.isArray(grid.data?.entries), grid.error ? grid.error.message : `n=${grid.data?.entries?.length}`)
   const entry = (grid.data?.entries ?? []).find((e) => e && Object.keys(e).sort().join(',') === 'id,strokes')
   check('9b', 'grid entries have only id + strokes (no identity)', (grid.data?.entries ?? []).length === 0 || (grid.data?.entries ?? []).every((e) => Object.keys(e).sort().join(',') === 'id,strokes'), JSON.stringify(grid.data?.entries?.[0] ? Object.keys(grid.data.entries[0]) : null))
-  check('9c', 'grid excludes caller own entry', !(grid.data?.entries ?? []).some((e) => e.id === aEntry), 'found own entry in grid')
+  check('9c', 'grid excludes caller own entry', !(grid.data?.entries ?? []).some((e) => e.id === aToday), 'found own entry in grid')
   check('9d', 'grid has has_voted + voted_entry_ids', typeof grid.data?.has_voted === 'boolean' && Array.isArray(grid.data?.voted_entry_ids), JSON.stringify(grid.data ? Object.keys(grid.data) : null))
 }
 
