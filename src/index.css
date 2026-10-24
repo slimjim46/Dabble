@@ -167,7 +167,7 @@ body,
   bottom: max(12px, env(safe-area-inset-bottom));
   transform: translateX(-50%);
   z-index: 2;
-  width: min(440px, calc(100vw - 20px));
+  width: min(500px, calc(100vw - 20px));
   background: var(--ui-bg);
   border: 1px solid var(--ui-border);
   border-radius: 16px;
@@ -208,18 +208,19 @@ body,
   display: flex;
   gap: 6px;
   flex: 1;
+  min-width: 0;
 }
 
-.swatch {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  border: 2px solid transparent;
-  padding: 0;
-  cursor: pointer;
-  flex: none;
-  touch-action: manipulation;
-}
+   .swatch {
+     flex: 0 1 26px;
+     min-width: 16px;
+     aspect-ratio: 1;
+     border-radius: 50%;
+     border: 2px solid transparent;
+     padding: 0;
+     cursor: pointer;
+     touch-action: manipulation;
+   }
 
 .swatch-active {
   border-color: var(--ui-text);
